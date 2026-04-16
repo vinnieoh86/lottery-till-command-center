@@ -192,6 +192,9 @@ const elements = {
   gameRowTemplate: document.querySelector("#gameRowTemplate"),
   editInventoryButton: document.querySelector("#editInventoryButton"),
   saveDayButton: document.querySelector("#saveDayButton"),
+  previousDateGuard: document.querySelector("#previousDateGuard"),
+  previousDateGuardText: document.querySelector("#previousDateGuardText"),
+  unlockPreviousDateButton: document.querySelector("#unlockPreviousDateButton"),
   closedDayNotice: document.querySelector("#closedDayNotice"),
   instantSalesCard: document.querySelector("#instantSalesCard"),
   manualInstantCard: document.querySelector("#manualInstantCard"),
@@ -1028,8 +1031,61 @@ function isCompletedDay(date = state.businessDate) {
   return Boolean(state.dailyLogs[date]?.completedAt);
 }
 
+function isTodayDate(date = state.businessDate) {
+  return date === todayIso();
+}
+
+function isSavedPastDate(date = state.businessDate) {
+  return !isTodayDate(date) && Boolean(state.dailyLogs[date]?.savedAt);
+}
+
+function isPastDateLocked(date = state.businessDate) {
+  return isSavedPastDate(date) && !completedDayEditUnlocks.has(date);
+}
+
+function selectedDateLabel(date = state.businessDate) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function renderPreviousDateGuard() {
+  const locked = isSavedPastDate();
+  const unlocked = completedDayEditUnlocks.has(state.businessDate);
+  const dateLabel = selectedDateLabel();
+
+  elements.previousDateGuard.hidden = !locked;
+  if (!locked) return;
+
+  elements.previousDateGuard.classList.toggle("unlocked", unlocked);
+  elements.previousDateGuardText.textContent = unlocked
+    ? `${dateLabel} is unlocked for admin editing. Press Complete day when finished to relock it.`
+    : `${dateLabel} has saved data. It is read-only until an admin unlocks it.`;
+  elements.unlockPreviousDateButton.hidden = !isAdminRole() || unlocked;
+}
+
+function unlockPreviousDate() {
+  if (!isSavedPastDate()) return;
+
+  const ok = window.confirm(
+    `${selectedDateLabel()} has saved data.\n\nUnlock this previous date for editing? Press Complete day when finished to relock it.`,
+  );
+
+  if (!ok) return;
+
+  completedDayEditUnlocks.add(state.businessDate);
+  elements.syncStatus.textContent = "Previous date unlocked";
+  render();
+}
+
 function canEditActiveDay(targetInput) {
-  if (!isCompletedDay()) return true;
+  const dayLog = state.dailyLogs[state.businessDate];
+  const isToday = isTodayDate();
+  const isProtectedDate = Boolean(dayLog?.savedAt && !isToday) || isCompletedDay();
+
+  if (!isProtectedDate) return true;
   if (completedDayEditUnlocks.has(state.businessDate)) return true;
 
   const dateLabel = new Date(`${state.businessDate}T12:00:00`).toLocaleDateString("en-US", {
@@ -1037,13 +1093,12 @@ function canEditActiveDay(targetInput) {
     day: "numeric",
     year: "numeric",
   });
-  const ok = window.confirm(
-    `${dateLabel} is marked COMPLETE and protected.\n\nAre you sure you want to unlock and edit this date?`,
-  );
+  const reason = isCompletedDay() ? "marked COMPLETE" : "already saved";
+  const ok = window.confirm(`${dateLabel} is ${reason} and protected.\n\nAre you sure you want to unlock and edit this date?`);
 
   if (ok) {
     completedDayEditUnlocks.add(state.businessDate);
-    elements.syncStatus.textContent = "Completed day unlocked for editing";
+    elements.syncStatus.textContent = "Saved day unlocked for editing";
     return true;
   }
 
@@ -1104,6 +1159,9 @@ function switchDate(isoDate) {
   elements.businessDate.value = isoDate;
   hydrateActiveDay();
   persistState();
+  if (!isTodayDate(isoDate)) {
+    window.alert(`${selectedDateLabel(isoDate)} is not today's date. Saved data opens read-only unless an admin unlocks it.`);
+  }
   render();
 }
 
@@ -1130,8 +1188,9 @@ function formatGameValue(game) {
 function renderGames() {
   elements.gameRows.innerHTML = "";
   const isClosed = selectedDateIsClosed();
+  const isPastLocked = isPastDateLocked();
   elements.closedDayNotice.hidden = !isClosed;
-  elements.saveDayButton.disabled = isClosed;
+  elements.saveDayButton.disabled = isClosed || isPastLocked || (isSavedPastDate() && isUserRole());
 
   inventory.forEach((game, rowIndex) => {
     const entry = getEntry(game);
@@ -1172,7 +1231,11 @@ function renderGames() {
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
 
     row.querySelectorAll("[data-field]").forEach((field) => {
-      field.disabled = isClosed || (isUserRole() && field.dataset.field !== "todayEnding");
+      field.disabled =
+        isClosed ||
+        isPastLocked ||
+        (isUserRole() && field.dataset.field !== "todayEnding") ||
+        (isUserRole() && !isTodayDate());
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
@@ -1253,13 +1316,14 @@ function reorderInventory(fromId, toId) {
 function renderCashRows() {
   elements.cashRows.innerHTML = "";
   const isClosed = selectedDateIsClosed();
+  const isPastLocked = isPastDateLocked();
 
   cashDenominations.forEach((item, index) => {
     const row = document.createElement("label");
     row.className = "cash-row";
     row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.cashCounts[item.label] ?? 0}" />`;
     const input = row.querySelector("input");
-    input.disabled = isClosed;
+    input.disabled = isClosed || isPastLocked || (isUserRole() && !isTodayDate());
     input.addEventListener("input", (event) => {
       if (!canEditActiveDay(event.target)) {
         renderCashRows();
@@ -1279,6 +1343,7 @@ function renderCashRows() {
 
 function renderTillInputs() {
   const isClosed = selectedDateIsClosed();
+  const isPastLocked = isPastDateLocked();
   const tillInputOrder = [
     "grossSales",
     "onlineCancels",
@@ -1294,7 +1359,7 @@ function renderTillInputs() {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
     input.value = state.till[key] ?? 0;
-    input.disabled = isClosed || isUserRole();
+    input.disabled = isClosed || isUserRole() || isPastLocked;
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.oninput = (event) => {
@@ -2278,6 +2343,7 @@ function renderSavedOrders() {
 
 function render() {
   renderCalendar();
+  renderPreviousDateGuard();
   renderGames();
   renderCashRows();
   renderTillInputs();
@@ -2303,6 +2369,7 @@ elements.editInventoryButton.addEventListener("click", () => {
   renderGames();
 });
 elements.saveDayButton.addEventListener("click", saveDay);
+elements.unlockPreviousDateButton.addEventListener("click", unlockPreviousDate);
 elements.exportButton.addEventListener("click", exportJson);
 elements.orderDate.value = state.orderSettings.date;
 elements.backstockWeeks.value = state.orderSettings.backstockWeeks;

@@ -97,6 +97,14 @@
           </div>
         </section>
 
+        <section id="previousDateGuard" class="previous-date-guard app-view" data-view="daily till" hidden>
+          <div>
+            <strong>Previous date locked</strong>
+            <span id="previousDateGuardText">Saved dates are read-only until an admin unlocks them.</span>
+          </div>
+          <button id="unlockPreviousDateButton" type="button">Unlock previous date</button>
+        </section>
+
         <section id="daily-entry" class="panel collapsible-panel app-view" data-view="daily till">
           <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="false">
             <div>
@@ -199,14 +207,14 @@
 
         <section id="till" class="panel split-panel app-view" data-view="daily till">
           <div class="cash-drawer-panel">
-            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="false">
+            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="true">
               <div>
                 <p class="eyebrow">Step 2</p>
                 <h2>Cash drawer</h2>
               </div>
-              <span class="toggle-label">Maximize</span>
+              <span class="toggle-label">Minimize</span>
             </button>
-            <div id="cash-drawer-body" class="panel-body" hidden>
+            <div id="cash-drawer-body" class="panel-body">
             <div class="cash-grid" id="cashRows"></div>
             <div class="drawer-total">
               <span>Cash in drawer</span>
