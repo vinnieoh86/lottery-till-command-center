@@ -365,7 +365,7 @@ body.user-mode .metrics-grid,
 body.user-mode #instantMismatchAlert,
 body.user-mode #reconcilePanel,
 body.user-mode #reports,
-body.user-mode #till > div:first-child,
+body.user-mode .lottery-totals-panel,
 body.user-mode #daily-entry th:nth-child(8),
 body.user-mode #daily-entry td:nth-child(8),
 body.user-mode #daily-entry th:nth-child(9),
@@ -1787,6 +1787,8 @@ pre {
   }
 
   .mobile-entry-bar {
+    top: 4.6rem;
+    bottom: auto;
     display: grid;
   }
 

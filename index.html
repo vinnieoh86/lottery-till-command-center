@@ -195,10 +195,27 @@
         </section>
 
         <section id="till" class="panel split-panel app-view" data-view="daily till">
-          <div>
-            <button class="section-toggle" type="button" data-toggle-target="lottery-totals-body" aria-expanded="true">
+          <div class="cash-drawer-panel">
+            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="true">
               <div>
                 <p class="eyebrow">Step 2</p>
+                <h2>Cash drawer</h2>
+              </div>
+              <span class="toggle-label">Minimize</span>
+            </button>
+            <div id="cash-drawer-body" class="panel-body">
+            <div class="cash-grid" id="cashRows"></div>
+            <div class="drawer-total">
+              <span>Cash in drawer</span>
+              <strong id="cashDrawerTotal">$0.00</strong>
+            </div>
+            </div>
+          </div>
+
+          <div class="lottery-totals-panel">
+            <button class="section-toggle" type="button" data-toggle-target="lottery-totals-body" aria-expanded="true">
+              <div>
+                <p class="eyebrow">Step 3</p>
                 <h2>Lottery totals</h2>
               </div>
               <span class="toggle-label">Minimize</span>
@@ -245,23 +262,6 @@
             <p class="formula-note">
               Total lottery sales = gross - cancels - online cashes - instant cashes - cashless total - adjustments + office payout + instant sales.
             </p>
-            </div>
-          </div>
-
-          <div>
-            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="true">
-              <div>
-                <p class="eyebrow">Step 3</p>
-                <h2>Cash drawer</h2>
-              </div>
-              <span class="toggle-label">Minimize</span>
-            </button>
-            <div id="cash-drawer-body" class="panel-body">
-            <div class="cash-grid" id="cashRows"></div>
-            <div class="drawer-total">
-              <span>Cash in drawer</span>
-              <strong id="cashDrawerTotal">$0.00</strong>
-            </div>
             </div>
           </div>
         </section>
