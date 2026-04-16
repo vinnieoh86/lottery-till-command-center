@@ -281,6 +281,7 @@ let idleLockTimer = null;
 let activeMobileGameIndex = 0;
 let completedDayEditUnlocks = new Set();
 let previousDateDraft = null;
+let suppressNextMobileAutoAdvance = false;
 
 function todayIso() {
   const today = new Date();
@@ -497,6 +498,10 @@ function unlockWithPin(pin) {
 }
 
 function lockApp(message = "Enter PIN to continue.") {
+  if (previousDateDraft) {
+    resolvePreviousDateDraftBeforeLeaving();
+    hydrateActiveDay();
+  }
   window.clearTimeout(idleLockTimer);
   applyAccessRole(null);
   elements.pinEntry.value = "";
@@ -1109,6 +1114,31 @@ function unlockPreviousDate() {
   render();
 }
 
+function resolvePreviousDateDraftBeforeLeaving() {
+  if (!previousDateDraft) return;
+
+  const saveChanges = window.confirm(
+    `You are leaving ${selectedDateLabel(previousDateDraft.date)} with unlocked changes.\n\nOK = save all changes now.\nCancel = exit without saving changes.`,
+  );
+
+  const draftDate = previousDateDraft.date;
+
+  if (saveChanges) {
+    state.dailyLogs[draftDate] = cloneJson(previousDateDraft.dayLog);
+    state.dailyLogs[draftDate].totals = buildTotals();
+    state.dailyLogs[draftDate].savedAt = new Date().toISOString();
+    state.dailyLogs[draftDate].completedAt = state.dailyLogs[draftDate].savedAt;
+    state.lastSavedAt = state.dailyLogs[draftDate].savedAt;
+    elements.syncStatus.textContent = "Previous date changes saved";
+    persistState();
+  } else {
+    elements.syncStatus.textContent = "Previous date changes discarded";
+  }
+
+  previousDateDraft = null;
+  completedDayEditUnlocks.delete(draftDate);
+}
+
 function canEditActiveDay(targetInput) {
   const dayLog = state.dailyLogs[state.businessDate];
   const isToday = isTodayDate();
@@ -1182,6 +1212,10 @@ function renderCalendar() {
 }
 
 function switchDate(isoDate) {
+  if (previousDateDraft?.date === state.businessDate && isoDate !== state.businessDate) {
+    resolvePreviousDateDraftBeforeLeaving();
+    hydrateActiveDay();
+  }
   if (!isPreviousDateDraftMode()) {
     syncActiveDayDraft();
   }
@@ -1277,6 +1311,10 @@ function renderGames() {
       field.addEventListener("change", () => {
         if (field.dataset.field !== "todayEnding") return;
         if (!window.matchMedia("(max-width: 760px)").matches) return;
+        if (suppressNextMobileAutoAdvance) {
+          suppressNextMobileAutoAdvance = false;
+          return;
+        }
         window.setTimeout(() => focusAdjacentMobileGame(1), 80);
       });
       field.addEventListener("keydown", (event) => handleEntryKeydown(event, row, field.dataset.field));
@@ -1787,6 +1825,11 @@ function setupSectionToggles() {
 }
 
 function setActiveView(view, shouldScroll = false) {
+  if (previousDateDraft && view !== activeView) {
+    resolvePreviousDateDraftBeforeLeaving();
+    hydrateActiveDay();
+  }
+
   if (!isRoleAllowedView(view)) {
     view = "daily";
   }
@@ -2444,6 +2487,10 @@ elements.pinEntry.addEventListener("input", (event) => {
 elements.pinEntry.addEventListener("keydown", (event) => {
   if (event.key === "Enter") unlockWithPin(elements.pinEntry.value);
 });
+elements.pinOverlay.addEventListener("click", (event) => {
+  if (event.target.closest("button")) return;
+  elements.pinEntry.focus();
+});
 elements.pinPadButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const key = button.dataset.pinKey;
@@ -2490,8 +2537,23 @@ document.addEventListener("focusin", (event) => {
     }
   }
 });
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    const activeInput = document.activeElement;
+    if (!activeInput?.matches?.("[data-field='todayEnding']")) return;
+    if (event.target === activeInput) return;
+    suppressNextMobileAutoAdvance = true;
+  },
+  { capture: true },
+);
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
   document.addEventListener(eventName, resetIdleTimer, { passive: true });
+});
+window.addEventListener("beforeunload", (event) => {
+  if (!previousDateDraft) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
