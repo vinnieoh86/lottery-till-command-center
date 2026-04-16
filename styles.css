@@ -812,9 +812,9 @@ td[data-output] {
 }
 
 .locked-chip.edited-chip {
-  color: var(--green);
-  border-color: rgba(31, 122, 79, 0.34);
-  background: rgba(207, 255, 55, 0.24);
+  color: #8a1f1f;
+  border-color: rgba(190, 56, 56, 0.34);
+  background: rgba(255, 216, 216, 0.82);
 }
 
 .inventory-editing-row {

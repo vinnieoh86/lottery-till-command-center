@@ -239,6 +239,7 @@ const elements = {
   authSignUpButton: document.querySelector("#authSignUpButton"),
   authSignOutButton: document.querySelector("#authSignOutButton"),
   cloudSyncButton: document.querySelector("#cloudSyncButton"),
+  headerSyncButton: document.querySelector("#headerSyncButton"),
   pinOverlay: document.querySelector("#pinOverlay"),
   pinEntry: document.querySelector("#pinEntry"),
   pinMessage: document.querySelector("#pinMessage"),
@@ -329,6 +330,7 @@ function createDefaultState() {
     orderDc: Object.fromEntries([...dcBoxes].map((box) => [box, true])),
     extraOrders: cloneExtraOrders(),
     savedOrders: [],
+    previousDateUnlocks: {},
     orderSettings: {
       date: todayIso(),
       backstockWeeks: 2.5,
@@ -363,6 +365,7 @@ function normalizeStoredState(parsed = {}) {
     orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
     extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
     savedOrders: parsed.savedOrders || [],
+    previousDateUnlocks: parsed.previousDateUnlocks || {},
     orderSettings: {
       date: parsed.orderSettings?.date || todayIso(),
       backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
@@ -417,6 +420,7 @@ function renderAuthState() {
   elements.authUserLabel.textContent = email || "Not signed in";
   elements.authSignOutButton.hidden = !email;
   elements.cloudSyncButton.disabled = !email;
+  elements.headerSyncButton.disabled = !email;
   elements.authSignInButton.disabled = !supabaseClient || Boolean(email);
   elements.authSignUpButton.disabled = !supabaseClient || Boolean(email);
 
@@ -438,6 +442,12 @@ function isUserRole() {
 
 function currentUserName() {
   return currentUser?.name || (isAdminRole() ? "Admin" : isUserRole() ? "User" : "Unknown");
+}
+
+function formatAuditBadge(name, timestamp) {
+  if (!name) return "Locked";
+  if (!timestamp) return name;
+  return `${name} ${new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function isRoleAllowedView(view) {
@@ -535,6 +545,9 @@ function lockApp(message = "Enter PIN to continue.") {
   if (previousDateDraft) {
     resolvePreviousDateDraftBeforeLeaving();
     hydrateActiveDay();
+  }
+  if (!isTodayDate()) {
+    switchDate(todayIso());
   }
   window.clearTimeout(idleLockTimer);
   currentUser = null;
@@ -780,6 +793,7 @@ async function signOutOfCloud() {
   if (!supabaseClient) return;
   await supabaseClient.auth.signOut();
   currentSession = null;
+  if (!isTodayDate()) switchDate(todayIso());
   renderAuthState();
 }
 
@@ -1122,8 +1136,12 @@ function isSavedPastDate(date = state.businessDate) {
   return !isTodayDate(date) && Boolean(state.dailyLogs[date]?.savedAt);
 }
 
+function isPreviousDateUnlocked(date = state.businessDate) {
+  return Boolean(state.previousDateUnlocks?.[date]) || completedDayEditUnlocks.has(date);
+}
+
 function isPastDateLocked(date = state.businessDate) {
-  return isSavedPastDate(date) && !completedDayEditUnlocks.has(date);
+  return isSavedPastDate(date) && !isPreviousDateUnlocked(date);
 }
 
 function isPreviousDateDraftMode(date = state.businessDate) {
@@ -1150,15 +1168,20 @@ function selectedDateLabel(date = state.businessDate) {
 
 function renderPreviousDateGuard() {
   const locked = isSavedPastDate();
-  const unlocked = completedDayEditUnlocks.has(state.businessDate);
+  const unlocked = isPreviousDateUnlocked(state.businessDate);
+  const unlockInfo = state.previousDateUnlocks?.[state.businessDate];
   const dateLabel = selectedDateLabel();
 
   elements.previousDateGuard.hidden = !locked;
   if (!locked) return;
 
   elements.previousDateGuard.classList.toggle("unlocked", unlocked);
+  const unlockedBy = unlockInfo?.unlockedBy ? ` by ${unlockInfo.unlockedBy}` : "";
+  const unlockedAt = unlockInfo?.unlockedAt ? ` at ${new Date(unlockInfo.unlockedAt).toLocaleTimeString()}` : "";
   elements.previousDateGuardText.textContent = unlocked
-    ? `${dateLabel} is unlocked for admin editing. Press Complete day when finished to relock it.`
+    ? isAdminRole()
+      ? `${dateLabel} is unlocked${unlockedBy}${unlockedAt}. Admin can edit; Complete day relocks it.`
+      : `${dateLabel} is unlocked${unlockedBy}${unlockedAt} for review. User mode remains read-only.`
     : `${dateLabel} has saved data. It is read-only until an admin unlocks it.`;
   elements.unlockPreviousDateButton.hidden = !isAdminRole() || unlocked;
 }
@@ -1166,6 +1189,13 @@ function renderPreviousDateGuard() {
 function unlockPreviousDate() {
   if (!isSavedPastDate()) return;
 
+  state.previousDateUnlocks = {
+    ...(state.previousDateUnlocks || {}),
+    [state.businessDate]: {
+      unlockedBy: currentUserName(),
+      unlockedAt: new Date().toISOString(),
+    },
+  };
   completedDayEditUnlocks.add(state.businessDate);
   previousDateDraft = {
     date: state.businessDate,
@@ -1173,6 +1203,7 @@ function unlockPreviousDate() {
   };
   hydrateActiveDay();
   elements.syncStatus.textContent = "Previous date unlocked";
+  persistState();
   render();
 }
 
@@ -1180,7 +1211,9 @@ function resolvePreviousDateDraftBeforeLeaving() {
   if (!previousDateDraft) return;
   const draftDate = previousDateDraft.date;
   previousDateDraft = null;
-  completedDayEditUnlocks.delete(draftDate);
+  if (!state.previousDateUnlocks?.[draftDate]) {
+    completedDayEditUnlocks.delete(draftDate);
+  }
   elements.syncStatus.textContent = "Previous date edit mode closed";
 }
 
@@ -1190,7 +1223,7 @@ function canEditActiveDay(targetInput) {
   const isProtectedDate = Boolean(dayLog?.savedAt && !isToday) || isCompletedDay();
 
   if (!isProtectedDate) return true;
-  if (completedDayEditUnlocks.has(state.businessDate)) return true;
+  if (isPreviousDateUnlocked(state.businessDate)) return true;
 
   const dateLabel = new Date(`${state.businessDate}T12:00:00`).toLocaleDateString("en-US", {
     month: "short",
@@ -1403,7 +1436,8 @@ function renderGames() {
     const editorChip = row.querySelector(".locked-chip");
     if (editorChip) {
       const editedBy = entry.updatedBy || entry.completedBy || "Locked";
-      editorChip.textContent = editedBy;
+      const editedAt = entry.updatedAt || entry.completedAt || "";
+      editorChip.textContent = formatAuditBadge(editedBy === "Locked" ? "" : editedBy, editedAt);
       editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
       editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy || entry.completedBy));
     }
@@ -1734,7 +1768,7 @@ function updateEntry(game, key, value, row) {
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
   const editorChip = row.querySelector(".locked-chip");
   if (editorChip) {
-    editorChip.textContent = entry.updatedBy || "Locked";
+    editorChip.textContent = formatAuditBadge(entry.updatedBy, entry.updatedAt);
     editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
     editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy));
   }
@@ -1815,6 +1849,9 @@ function saveDay() {
   if (isPreviousDateDraftMode()) {
     state.dailyLogs[state.businessDate] = cloneJson(dayLog);
     previousDateDraft = null;
+  }
+  if (state.previousDateUnlocks?.[state.businessDate]) {
+    delete state.previousDateUnlocks[state.businessDate];
   }
   completedDayEditUnlocks.delete(state.businessDate);
   state.lastSavedAt = dayLog.savedAt;
@@ -2596,6 +2633,7 @@ function renderSavedOrders() {
       (order) => {
         const orderRows = order.rows
           .filter((row) => row.need > 0)
+          .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }))
           .map((row) => `<tr><td>${row.box}</td><td>${currency.format(row.value).replace(".00", "")}</td><td>${row.bookNumber || "-"}</td><td>${row.name}</td><td>${row.need}</td></tr>`)
           .join("");
         const extraRows = (order.extraOrders || [])
@@ -2673,6 +2711,9 @@ elements.authSignInButton.addEventListener("click", signInToCloud);
 elements.authSignUpButton.addEventListener("click", signUpForCloud);
 elements.authSignOutButton.addEventListener("click", signOutOfCloud);
 elements.cloudSyncButton.addEventListener("click", () => {
+  loadCloudState();
+});
+elements.headerSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
 elements.pinEntry.addEventListener("input", (event) => {
