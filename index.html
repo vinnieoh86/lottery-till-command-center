@@ -106,14 +106,14 @@
         </section>
 
         <section id="daily-entry" class="panel collapsible-panel app-view" data-view="daily till">
-          <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="false">
+          <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="true">
             <div>
               <p class="eyebrow">Step 1</p>
               <h2>Daily ticket count <span id="dailyCountDate" class="selected-date-label"></span></h2>
             </div>
-            <span class="toggle-label">Maximize</span>
+            <span class="toggle-label">Minimize</span>
           </button>
-          <div id="daily-entry-body" class="panel-body" hidden>
+          <div id="daily-entry-body" class="panel-body">
             <div class="section-heading compact">
               <span></span>
             <div class="actions">
@@ -508,7 +508,7 @@
           <span data-static="value" class="pill-value"></span>
         </td>
         <td data-output="previousEnding">0</td>
-        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" /></td>
+        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" inputmode="numeric" enterkeyhint="next" pattern="[0-9]*" /></td>
         <td data-output="ticketsSold">0</td>
         <td data-output="sales">$0.00</td>
         <td><input data-field="manualInstantSold" class="manual-instant-input" type="number" min="0" step="1" inputmode="decimal" /></td>
