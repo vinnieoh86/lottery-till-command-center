@@ -264,6 +264,7 @@ const elements = {
 
 let state = loadState();
 state.businessDate = todayIso();
+state.uiSettings = { ...(state.uiSettings || {}), mobileEntryDock: "bottom" };
 inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
@@ -279,6 +280,7 @@ let accessRole = null;
 let idleLockTimer = null;
 let activeMobileGameIndex = 0;
 let completedDayEditUnlocks = new Set();
+let previousDateDraft = null;
 
 function todayIso() {
   const today = new Date();
@@ -731,6 +733,10 @@ function normalizeNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function normalizeTill(till = {}) {
   const normalized = { ...defaultTill, ...till };
 
@@ -762,6 +768,10 @@ function emptyCashCounts() {
 }
 
 function getDayLog(date = state.businessDate) {
+  if (previousDateDraft?.date === date) {
+    return previousDateDraft.dayLog;
+  }
+
   if (!state.dailyLogs[date]) {
     state.dailyLogs[date] = {
       entries: {},
@@ -1043,6 +1053,20 @@ function isPastDateLocked(date = state.businessDate) {
   return isSavedPastDate(date) && !completedDayEditUnlocks.has(date);
 }
 
+function isPreviousDateDraftMode(date = state.businessDate) {
+  return previousDateDraft?.date === date;
+}
+
+function persistIfLiveDate(statusText = "Autosaved") {
+  if (isPreviousDateDraftMode()) {
+    elements.syncStatus.textContent = "Previous date draft - press Complete day to save";
+    return;
+  }
+
+  markActiveDaySaved(statusText);
+  persistState();
+}
+
 function selectedDateLabel(date = state.businessDate) {
   return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
     month: "short",
@@ -1076,6 +1100,11 @@ function unlockPreviousDate() {
   if (!ok) return;
 
   completedDayEditUnlocks.add(state.businessDate);
+  previousDateDraft = {
+    date: state.businessDate,
+    dayLog: cloneJson(state.dailyLogs[state.businessDate]),
+  };
+  hydrateActiveDay();
   elements.syncStatus.textContent = "Previous date unlocked";
   render();
 }
@@ -1153,15 +1182,15 @@ function renderCalendar() {
 }
 
 function switchDate(isoDate) {
-  syncActiveDayDraft();
+  if (!isPreviousDateDraftMode()) {
+    syncActiveDayDraft();
+  }
+  if (previousDateDraft?.date !== isoDate) previousDateDraft = null;
   state.businessDate = isoDate;
   reconcileVisible = false;
   elements.businessDate.value = isoDate;
   hydrateActiveDay();
   persistState();
-  if (!isTodayDate(isoDate)) {
-    window.alert(`${selectedDateLabel(isoDate)} is not today's date. Saved data opens read-only unless an admin unlocks it.`);
-  }
   render();
 }
 
@@ -1244,6 +1273,11 @@ function renderGames() {
           activeMobileGameIndex = rowIndex;
           renderMobileEntryBar();
         }
+      });
+      field.addEventListener("change", () => {
+        if (field.dataset.field !== "todayEnding") return;
+        if (!window.matchMedia("(max-width: 760px)").matches) return;
+        window.setTimeout(() => focusAdjacentMobileGame(1), 80);
       });
       field.addEventListener("keydown", (event) => handleEntryKeydown(event, row, field.dataset.field));
     });
@@ -1332,8 +1366,7 @@ function renderCashRows() {
       }
       state.cashCounts[item.label] = normalizeNumber(event.target.value);
       syncActiveDayDraft();
-      markActiveDaySaved();
-      persistState();
+      persistIfLiveDate();
       renderTotals();
     });
     input.addEventListener("keydown", handleGroupedEnterKeydown);
@@ -1371,8 +1404,7 @@ function renderTillInputs() {
       state.till[key] = normalizeNumber(event.target.value);
       state.till = normalizeTill(state.till);
       syncActiveDayDraft();
-      markActiveDaySaved();
-      persistState();
+      persistIfLiveDate();
       renderTillInputs();
       renderTotals();
     };
@@ -1480,7 +1512,7 @@ function renderReconciliationRows() {
       if (!game) return;
       getEntry(game).manualInstantSold = event.target.value === "" ? "" : normalizeNumber(event.target.value);
       syncActiveDayDraft();
-      persistState();
+      persistIfLiveDate();
       renderGames();
       renderTotals();
     });
@@ -1502,8 +1534,7 @@ function updateEntry(game, key, value, row) {
   row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
 
-  markActiveDaySaved();
-  persistState();
+  persistIfLiveDate();
   renderTotals();
 }
 
@@ -1564,11 +1595,20 @@ function focusFirstInputInGroup(group) {
 function saveDay() {
   if (selectedDateIsClosed()) return;
 
+  if (isPreviousDateDraftMode()) {
+    const ok = window.confirm(`Save all unlocked changes for ${selectedDateLabel()} and relock this date?`);
+    if (!ok) return;
+  }
+
   const dayLog = getDayLog();
   syncActiveDayDraft();
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   dayLog.completedAt = dayLog.savedAt;
+  if (isPreviousDateDraftMode()) {
+    state.dailyLogs[state.businessDate] = cloneJson(dayLog);
+    previousDateDraft = null;
+  }
   completedDayEditUnlocks.delete(state.businessDate);
   state.lastSavedAt = dayLog.savedAt;
   elements.syncStatus.textContent = "Day completed and locked";
