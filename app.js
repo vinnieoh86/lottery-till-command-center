@@ -244,8 +244,12 @@ const elements = {
   pinPadButtons: document.querySelectorAll("[data-pin-key], [data-pin-action]"),
   adminPinInput: document.querySelector("#adminPinInput"),
   userPinInput: document.querySelector("#userPinInput"),
+  newUserPinInput: document.querySelector("#newUserPinInput"),
+  confirmUserPinInput: document.querySelector("#confirmUserPinInput"),
   savePinsButton: document.querySelector("#savePinsButton"),
+  changeUserPinButton: document.querySelector("#changeUserPinButton"),
   mobileEntryBar: document.querySelector("#mobileEntryBar"),
+  mobileDockToggleButton: document.querySelector("#mobileDockToggleButton"),
   mobilePrevBoxButton: document.querySelector("#mobilePrevBoxButton"),
   mobileNextBoxButton: document.querySelector("#mobileNextBoxButton"),
   mobileBoxProgress: document.querySelector("#mobileBoxProgress"),
@@ -256,6 +260,7 @@ const elements = {
 };
 
 let state = loadState();
+state.businessDate = todayIso();
 inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
@@ -270,6 +275,7 @@ let isApplyingCloudState = false;
 let accessRole = null;
 let idleLockTimer = null;
 let activeMobileGameIndex = 0;
+let completedDayEditUnlocks = new Set();
 
 function todayIso() {
   const today = new Date();
@@ -315,6 +321,9 @@ function createDefaultState() {
       admin: "0000",
       user: "1111",
     },
+    uiSettings: {
+      mobileEntryDock: "bottom",
+    },
     lastSavedAt: null,
   };
 }
@@ -343,6 +352,9 @@ function normalizeStoredState(parsed = {}) {
     pinSettings: {
       admin: parsed.pinSettings?.admin || "0000",
       user: parsed.pinSettings?.user || "1111",
+    },
+    uiSettings: {
+      mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
     },
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
@@ -434,11 +446,13 @@ function renderAccessControls() {
   const admin = isAdminRole();
   const user = isUserRole();
   elements.editInventoryButton.hidden = !admin;
-  elements.saveDayButton.hidden = user;
+  elements.saveDayButton.hidden = false;
   elements.exportButton.hidden = !admin;
   elements.seedMonthButton.hidden = !admin;
   elements.adminPinInput.value = state.pinSettings.admin;
   elements.userPinInput.value = state.pinSettings.user;
+  elements.newUserPinInput.value = "";
+  elements.confirmUserPinInput.value = "";
   renderMobileEntryBar();
 }
 
@@ -508,6 +522,29 @@ function savePins() {
   elements.pinMessage.textContent = "PIN settings saved.";
 }
 
+function changeUserPin() {
+  const userPin = elements.newUserPinInput.value.trim();
+  const confirmPin = elements.confirmUserPinInput.value.trim();
+
+  if (!/^\d{4}$/.test(userPin)) {
+    elements.pinMessage.textContent = "New user PIN must be exactly 4 digits.";
+    return;
+  }
+
+  if (userPin !== confirmPin) {
+    elements.pinMessage.textContent = "User PIN confirmation does not match.";
+    return;
+  }
+
+  state.pinSettings = { ...state.pinSettings, user: userPin };
+  elements.userPinInput.value = userPin;
+  elements.newUserPinInput.value = "";
+  elements.confirmUserPinInput.value = "";
+  persistState();
+  elements.pinMessage.textContent = "User PIN changed.";
+  elements.syncStatus.textContent = "User PIN changed";
+}
+
 function getTodayEndingInputs() {
   return Array.from(elements.gameRows.querySelectorAll("[data-field='todayEnding']:not(:disabled)"));
 }
@@ -517,12 +554,25 @@ function renderMobileEntryBar() {
   elements.mobileEntryBar.hidden = !showBar;
   if (!showBar) return;
 
+  const dock = state.uiSettings?.mobileEntryDock || "bottom";
+  elements.mobileEntryBar.dataset.dock = dock;
+  elements.mobileDockToggleButton.textContent = dock === "bottom" ? "Top" : "Bottom";
   const total = inventory.length;
   const safeIndex = Math.min(Math.max(activeMobileGameIndex, 0), Math.max(total - 1, 0));
   const game = inventory[safeIndex];
   elements.mobileBoxProgress.textContent = game ? `Box ${game.box} (${safeIndex + 1}/${total})` : "No boxes";
   elements.mobilePrevBoxButton.disabled = safeIndex <= 0;
   elements.mobileNextBoxButton.disabled = safeIndex >= total - 1;
+}
+
+function toggleMobileEntryDock() {
+  const currentDock = state.uiSettings?.mobileEntryDock || "bottom";
+  state.uiSettings = {
+    ...(state.uiSettings || {}),
+    mobileEntryDock: currentDock === "bottom" ? "top" : "bottom",
+  };
+  persistState();
+  renderMobileEntryBar();
 }
 
 function focusMobileGame(index) {
@@ -974,6 +1024,35 @@ function syncActiveDayDraft() {
   dayLog.cashCounts = { ...state.cashCounts };
 }
 
+function isCompletedDay(date = state.businessDate) {
+  return Boolean(state.dailyLogs[date]?.completedAt);
+}
+
+function canEditActiveDay(targetInput) {
+  if (!isCompletedDay()) return true;
+  if (completedDayEditUnlocks.has(state.businessDate)) return true;
+
+  const dateLabel = new Date(`${state.businessDate}T12:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const ok = window.confirm(
+    `${dateLabel} is marked COMPLETE and protected.\n\nAre you sure you want to unlock and edit this date?`,
+  );
+
+  if (ok) {
+    completedDayEditUnlocks.add(state.businessDate);
+    elements.syncStatus.textContent = "Completed day unlocked for editing";
+    return true;
+  }
+
+  if (targetInput) {
+    targetInput.value = targetInput.dataset.focusValue ?? targetInput.defaultValue ?? "";
+  }
+  return false;
+}
+
 function markActiveDaySaved(statusText = "Autosaved") {
   const dayLog = getDayLog();
   dayLog.totals = buildTotals();
@@ -1010,7 +1089,9 @@ function renderCalendar() {
     if (date.getDay() === 0) card.classList.add("closed");
     if (isoDate === state.businessDate) card.classList.add("active");
     if (dayLog?.savedAt) card.classList.add("saved");
-    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>`;
+    if (dayLog?.completedAt) card.classList.add("completed");
+    const status = dayLog?.completedAt ? "<small>Done</small>" : dayLog?.savedAt ? "<small>Draft</small>" : "";
+    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}`;
     card.addEventListener("click", () => switchDate(isoDate));
     elements.calendarDays.appendChild(card);
   }
@@ -1180,6 +1261,11 @@ function renderCashRows() {
     const input = row.querySelector("input");
     input.disabled = isClosed;
     input.addEventListener("input", (event) => {
+      if (!canEditActiveDay(event.target)) {
+        renderCashRows();
+        renderTotals();
+        return;
+      }
       state.cashCounts[item.label] = normalizeNumber(event.target.value);
       syncActiveDayDraft();
       markActiveDaySaved();
@@ -1212,6 +1298,11 @@ function renderTillInputs() {
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.oninput = (event) => {
+      if (!canEditActiveDay(event.target)) {
+        renderTillInputs();
+        renderTotals();
+        return;
+      }
       state.till[key] = normalizeNumber(event.target.value);
       state.till = normalizeTill(state.till);
       syncActiveDayDraft();
@@ -1316,6 +1407,10 @@ function renderReconciliationRows() {
 
   elements.reconcileRows.querySelectorAll("[data-reconcile-box]").forEach((input) => {
     input.addEventListener("input", (event) => {
+      if (!canEditActiveDay(event.target)) {
+        renderTotals();
+        return;
+      }
       const game = inventory.find((item) => gameId(item) === event.target.dataset.reconcileBox);
       if (!game) return;
       getEntry(game).manualInstantSold = event.target.value === "" ? "" : normalizeNumber(event.target.value);
@@ -1328,6 +1423,13 @@ function renderReconciliationRows() {
 }
 
 function updateEntry(game, key, value, row) {
+  const field = row?.querySelector(`[data-field='${key}']`);
+  if (!canEditActiveDay(field)) {
+    renderGames();
+    renderTotals();
+    return;
+  }
+
   const entry = getEntry(game);
   entry[key] = value === "" ? "" : normalizeNumber(value);
 
@@ -1401,8 +1503,10 @@ function saveDay() {
   syncActiveDayDraft();
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
+  dayLog.completedAt = dayLog.savedAt;
+  completedDayEditUnlocks.delete(state.businessDate);
   state.lastSavedAt = dayLog.savedAt;
-  elements.syncStatus.textContent = "Emergency saved";
+  elements.syncStatus.textContent = "Day completed and locked";
   persistState();
   render();
 }
@@ -2251,6 +2355,8 @@ elements.pinPadButtons.forEach((button) => {
 });
 elements.pinLockButton.addEventListener("click", () => lockApp());
 elements.savePinsButton.addEventListener("click", savePins);
+elements.changeUserPinButton.addEventListener("click", changeUserPin);
+elements.mobileDockToggleButton.addEventListener("click", toggleMobileEntryDock);
 elements.mobilePrevBoxButton.addEventListener("click", () => focusAdjacentMobileGame(-1));
 elements.mobileNextBoxButton.addEventListener("click", () => focusAdjacentMobileGame(1));
 elements.viewButtons.forEach((button) => {

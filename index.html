@@ -84,31 +84,34 @@
         </header>
 
         <section class="month-strip app-view" data-view="daily till" aria-label="Month calendar">
-          <div class="section-heading">
+          <button class="section-toggle" type="button" data-toggle-target="month-strip-body" aria-expanded="false">
             <div>
               <p class="eyebrow">Auto month</p>
               <h2 id="monthTitle">April 2026</h2>
             </div>
-            <span>Defaults to today's date. Sundays are blacked out automatically.</span>
+            <span class="toggle-label">Maximize</span>
+          </button>
+          <div id="month-strip-body" class="panel-body" hidden>
+            <p class="formula-note compact-note">Defaults to today's date. Sundays are blacked out. Green dots are edited drafts; checked days are completed and protected.</p>
+            <div id="calendarDays" class="calendar-grid"></div>
           </div>
-          <div id="calendarDays" class="calendar-grid"></div>
         </section>
 
         <section id="daily-entry" class="panel collapsible-panel app-view" data-view="daily till">
-          <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="true">
+          <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="false">
             <div>
               <p class="eyebrow">Step 1</p>
               <h2>Daily ticket count <span id="dailyCountDate" class="selected-date-label"></span></h2>
             </div>
-            <span class="toggle-label">Minimize</span>
+            <span class="toggle-label">Maximize</span>
           </button>
-          <div id="daily-entry-body" class="panel-body">
+          <div id="daily-entry-body" class="panel-body" hidden>
             <div class="section-heading compact">
               <span></span>
             <div class="actions">
               <span class="lock-note">Inventory fields locked for employee mode</span>
               <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
-              <button id="saveDayButton" type="button">Save day</button>
+              <button id="saveDayButton" type="button">Complete day</button>
             </div>
           </div>
           <div id="closedDayNotice" class="closed-day-notice" hidden>
@@ -196,14 +199,14 @@
 
         <section id="till" class="panel split-panel app-view" data-view="daily till">
           <div class="cash-drawer-panel">
-            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="true">
+            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="false">
               <div>
                 <p class="eyebrow">Step 2</p>
                 <h2>Cash drawer</h2>
               </div>
-              <span class="toggle-label">Minimize</span>
+              <span class="toggle-label">Maximize</span>
             </button>
-            <div id="cash-drawer-body" class="panel-body">
+            <div id="cash-drawer-body" class="panel-body" hidden>
             <div class="cash-grid" id="cashRows"></div>
             <div class="drawer-total">
               <span>Cash in drawer</span>
@@ -431,6 +434,23 @@
               <input id="userPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
             </label>
           </div>
+          <div class="settings-card">
+            <h3>Change user PIN</h3>
+            <p>Quick employee PIN update without touching the admin PIN.</p>
+            <div class="settings-grid">
+              <label>
+                New user PIN
+                <input id="newUserPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+              </label>
+              <label>
+                Confirm user PIN
+                <input id="confirmUserPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button id="changeUserPinButton" class="ghost-button" type="button">Change user PIN</button>
+            </div>
+          </div>
           <div class="settings-actions">
             <button id="savePinsButton" type="button">Save PINs</button>
           </div>
@@ -465,6 +485,7 @@
     </section>
 
     <section id="mobileEntryBar" class="mobile-entry-bar" aria-label="Mobile box navigation">
+      <button id="mobileDockToggleButton" class="ghost-button mobile-dock-toggle" type="button" aria-label="Move mobile box controls">Move</button>
       <button id="mobilePrevBoxButton" class="ghost-button" type="button">Prev box</button>
       <strong id="mobileBoxProgress">Box 1 of 47</strong>
       <button id="mobileNextBoxButton" type="button">Next box</button>
