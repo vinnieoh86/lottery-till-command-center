@@ -39,6 +39,19 @@
             <strong id="syncStatus">Local draft</strong>
           </div>
         </section>
+
+        <section class="auth-card">
+          <p>Team login</p>
+          <strong id="authUserLabel">Not signed in</strong>
+          <input id="authEmail" type="email" placeholder="email" autocomplete="email" />
+          <input id="authPassword" type="password" placeholder="password" autocomplete="current-password" />
+          <div class="auth-actions">
+            <button id="authSignInButton" type="button">Sign in</button>
+            <button id="authSignUpButton" class="ghost-dark-button" type="button">Create</button>
+          </div>
+          <button id="cloudSyncButton" class="ghost-dark-button" type="button">Sync now</button>
+          <button id="authSignOutButton" class="ghost-dark-button" type="button" hidden>Sign out</button>
+        </section>
       </aside>
 
       <main class="workspace">
@@ -387,7 +400,7 @@
           </div>
           <div class="saved-orders-card">
             <h3>Saved weekly order sheets</h3>
-            <p class="save-location-note">Saved in this browser for now. The Supabase tables are ready for team-sync wiring next.</p>
+            <p class="save-location-note">Saved locally and synced to Supabase when signed in.</p>
             <button id="saveWeeklyOrderButton" type="button">Save weekly order</button>
             <div id="savedOrderRows" class="saved-order-list"></div>
           </div>
@@ -413,6 +426,7 @@
       </tr>
     </template>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="app.js"></script>
   </body>
 </html>

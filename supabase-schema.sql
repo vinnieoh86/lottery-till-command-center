@@ -102,3 +102,34 @@ alter table public.daily_cash_counts enable row level security;
 alter table public.weekly_order_sheets enable row level security;
 alter table public.weekly_order_rows enable row level security;
 alter table public.weekly_order_extra_rows enable row level security;
+
+create table if not exists public.app_state_snapshots (
+  store_key text primary key,
+  state jsonb not null default '{}'::jsonb,
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.app_state_snapshots enable row level security;
+
+drop policy if exists "Authenticated users can read app state" on public.app_state_snapshots;
+create policy "Authenticated users can read app state"
+  on public.app_state_snapshots
+  for select
+  to authenticated
+  using (true);
+
+drop policy if exists "Authenticated users can insert app state" on public.app_state_snapshots;
+create policy "Authenticated users can insert app state"
+  on public.app_state_snapshots
+  for insert
+  to authenticated
+  with check (true);
+
+drop policy if exists "Authenticated users can update app state" on public.app_state_snapshots;
+create policy "Authenticated users can update app state"
+  on public.app_state_snapshots
+  for update
+  to authenticated
+  using (true)
+  with check (true);

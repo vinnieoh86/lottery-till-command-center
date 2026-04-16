@@ -1,4 +1,11 @@
-﻿const STORAGE_KEY = "lotteryTillState:v2";
+const STORAGE_KEY = "lotteryTillState:v2";
+const CLOUD_STORE_KEY = "lottery-till-main";
+const SUPABASE_URL = "https://psngcbeffraghwwuihsk.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzbmdjYmVmZnJhZ2h3d3VpaHNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyOTE2NzYsImV4cCI6MjA5MTg2NzY3Nn0.FzLgqimL1vrwX1PEx4zVTqyfwgKqKrOs9ueVfIXSAKw";
+const supabaseClient = window.supabase?.createClient
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
 
 const ticketRules = {
   1: 200,
@@ -221,6 +228,13 @@ const elements = {
   saveWeeklyOrderButton: document.querySelector("#saveWeeklyOrderButton"),
   savedOrderRows: document.querySelector("#savedOrderRows"),
   clearActiveTabButton: document.querySelector("#clearActiveTabButton"),
+  authEmail: document.querySelector("#authEmail"),
+  authPassword: document.querySelector("#authPassword"),
+  authUserLabel: document.querySelector("#authUserLabel"),
+  authSignInButton: document.querySelector("#authSignInButton"),
+  authSignUpButton: document.querySelector("#authSignUpButton"),
+  authSignOutButton: document.querySelector("#authSignOutButton"),
+  cloudSyncButton: document.querySelector("#cloudSyncButton"),
   viewButtons: document.querySelectorAll("[data-view-button]"),
   appViews: document.querySelectorAll("[data-view]"),
   sortHeaders: document.querySelectorAll("[data-sort-key]"),
@@ -236,6 +250,9 @@ let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
 let reconcileVisible = false;
+let currentSession = null;
+let cloudSaveTimer = null;
+let isApplyingCloudState = false;
 
 function todayIso() {
   const today = new Date();
@@ -261,32 +278,7 @@ function selectedMonthDates() {
   });
 }
 
-function loadState() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    return {
-      businessDate: todayIso(),
-      inventory: parsed.inventory || inventory,
-      dailyLogs: parsed.dailyLogs || {},
-      till: normalizeTill(parsed.till),
-      cashCounts: {
-        ...Object.fromEntries(cashDenominations.map((item) => [item.label, 0])),
-        ...(parsed.cashCounts || {}),
-      },
-      orderInventory: { ...emptyOrderInventory(), ...(parsed.orderInventory || {}) },
-      orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
-      extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
-      savedOrders: parsed.savedOrders || [],
-      orderSettings: {
-        date: parsed.orderSettings?.date || todayIso(),
-        backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
-        highTicketThreshold: normalizeNumber(parsed.orderSettings?.highTicketThreshold) || 40,
-      },
-      lastSavedAt: parsed.lastSavedAt || null,
-    };
-  }
-
+function createDefaultState() {
   return {
     businessDate: todayIso(),
     inventory,
@@ -306,9 +298,208 @@ function loadState() {
   };
 }
 
+function normalizeStoredState(parsed = {}) {
+  const defaults = createDefaultState();
+  return {
+    ...defaults,
+    businessDate: parsed.businessDate || todayIso(),
+    inventory: parsed.inventory || inventory,
+    dailyLogs: parsed.dailyLogs || {},
+    till: normalizeTill(parsed.till),
+    cashCounts: {
+      ...emptyCashCounts(),
+      ...(parsed.cashCounts || {}),
+    },
+    orderInventory: { ...emptyOrderInventory(), ...(parsed.orderInventory || {}) },
+    orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
+    extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
+    savedOrders: parsed.savedOrders || [],
+    orderSettings: {
+      date: parsed.orderSettings?.date || todayIso(),
+      backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
+      highTicketThreshold: normalizeNumber(parsed.orderSettings?.highTicketThreshold) || 40,
+    },
+    lastSavedAt: parsed.lastSavedAt || null,
+    seedVersions: parsed.seedVersions || {},
+  };
+}
+
+function loadState() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (!stored) return createDefaultState();
+
+  try {
+    return normalizeStoredState(JSON.parse(stored));
+  } catch {
+    return createDefaultState();
+  }
+}
+
 function persistState() {
   state.inventory = inventory;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleCloudSave();
+}
+
+function getSerializableState() {
+  state.inventory = inventory;
+  return {
+    ...state,
+    inventory,
+  };
+}
+
+function setSyncStatus(message) {
+  elements.syncStatus.textContent = message;
+}
+
+function renderAuthState() {
+  const email = currentSession?.user?.email;
+  elements.authUserLabel.textContent = email || "Not signed in";
+  elements.authSignOutButton.hidden = !email;
+  elements.cloudSyncButton.disabled = !email;
+  elements.authSignInButton.disabled = !supabaseClient || Boolean(email);
+  elements.authSignUpButton.disabled = !supabaseClient || Boolean(email);
+
+  if (!supabaseClient) {
+    setSyncStatus("Local draft");
+    elements.authUserLabel.textContent = "Supabase offline";
+  } else if (!email) {
+    setSyncStatus("Local draft");
+  }
+}
+
+function scheduleCloudSave() {
+  if (isApplyingCloudState || !supabaseClient || !currentSession) return;
+  window.clearTimeout(cloudSaveTimer);
+  setSyncStatus("Cloud sync queued");
+  cloudSaveTimer = window.setTimeout(() => {
+    saveCloudState();
+  }, 1200);
+}
+
+async function saveCloudState() {
+  if (!supabaseClient || !currentSession) return;
+
+  setSyncStatus("Syncing cloud");
+  const { error } = await supabaseClient.from("app_state_snapshots").upsert(
+    {
+      store_key: CLOUD_STORE_KEY,
+      state: getSerializableState(),
+      updated_by: currentSession.user.id,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "store_key" },
+  );
+
+  if (error) {
+    setSyncStatus(`Sync error: ${error.message}`);
+    return;
+  }
+
+  setSyncStatus("Cloud synced");
+}
+
+async function loadCloudState() {
+  if (!supabaseClient || !currentSession) return;
+
+  setSyncStatus("Loading cloud");
+  const { data, error } = await supabaseClient
+    .from("app_state_snapshots")
+    .select("state, updated_at")
+    .eq("store_key", CLOUD_STORE_KEY)
+    .maybeSingle();
+
+  if (error) {
+    setSyncStatus(`Load error: ${error.message}`);
+    return;
+  }
+
+  if (!data?.state) {
+    await saveCloudState();
+    return;
+  }
+
+  isApplyingCloudState = true;
+  const activeDate = state.businessDate || todayIso();
+  state = normalizeStoredState({ ...data.state, businessDate: activeDate });
+  inventory = state.inventory || inventory;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  hydrateActiveDay();
+  render();
+  setActiveView(activeView);
+  isApplyingCloudState = false;
+  setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
+}
+
+async function signInToCloud() {
+  if (!supabaseClient) return;
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+
+  if (!email || !password) {
+    setSyncStatus("Enter email/password");
+    return;
+  }
+
+  setSyncStatus("Signing in");
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    setSyncStatus(`Login error: ${error.message}`);
+    return;
+  }
+
+  currentSession = data.session;
+  renderAuthState();
+  await loadCloudState();
+}
+
+async function signUpForCloud() {
+  if (!supabaseClient) return;
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+
+  if (!email || !password) {
+    setSyncStatus("Enter email/password");
+    return;
+  }
+
+  setSyncStatus("Creating user");
+  const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  if (error) {
+    setSyncStatus(`Signup error: ${error.message}`);
+    return;
+  }
+
+  currentSession = data.session;
+  renderAuthState();
+  setSyncStatus(data.session ? "Account created" : "Check email to confirm");
+  if (data.session) await saveCloudState();
+}
+
+async function signOutOfCloud() {
+  if (!supabaseClient) return;
+  await supabaseClient.auth.signOut();
+  currentSession = null;
+  renderAuthState();
+}
+
+async function initCloudSync() {
+  renderAuthState();
+  if (!supabaseClient) return;
+
+  const { data } = await supabaseClient.auth.getSession();
+  currentSession = data.session;
+  renderAuthState();
+
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    currentSession = session;
+    renderAuthState();
+  });
+
+  if (currentSession) {
+    await loadCloudState();
+  }
 }
 
 function normalizeNumber(value) {
@@ -1841,6 +2032,12 @@ elements.highTicketThreshold.addEventListener("input", (event) => {
 });
 elements.saveWeeklyOrderButton.addEventListener("click", saveWeeklyOrder);
 elements.clearActiveTabButton.addEventListener("click", clearActiveTab);
+elements.authSignInButton.addEventListener("click", signInToCloud);
+elements.authSignUpButton.addEventListener("click", signUpForCloud);
+elements.authSignOutButton.addEventListener("click", signOutOfCloud);
+elements.cloudSyncButton.addEventListener("click", () => {
+  loadCloudState();
+});
 elements.viewButtons.forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.viewButton, true));
 });
@@ -1881,3 +2078,5 @@ hydrateActiveDay();
 updateSortHeaderState();
 render();
 setActiveView(activeView);
+initCloudSync();
+

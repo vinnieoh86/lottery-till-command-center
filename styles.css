@@ -130,6 +130,7 @@ select:focus {
 
 .brand p,
 .sync-card p,
+.auth-card p,
 .eyebrow {
   margin: 0;
   color: inherit;
@@ -176,10 +177,57 @@ select:focus {
   display: flex;
   gap: 0.75rem;
   align-items: center;
-  margin-top: auto;
   border-radius: 0.9rem;
   padding: 0.68rem;
   background: rgba(255, 255, 255, 0.1);
+}
+
+.auth-card {
+  display: grid;
+  gap: 0.42rem;
+  margin-top: 0.55rem;
+  border-radius: 0.9rem;
+  padding: 0.68rem;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.auth-card strong {
+  display: block;
+  color: #f7f1df;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-card input {
+  border-radius: 0.55rem;
+  padding: 0.42rem 0.5rem;
+  font-size: 0.74rem;
+}
+
+.auth-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.auth-card button {
+  padding: 0.46rem 0.5rem;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.ghost-dark-button {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f7f1df;
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: none;
+}
+
+.ghost-dark-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: none;
 }
 
 .pulse {

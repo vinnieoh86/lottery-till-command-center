@@ -54,21 +54,22 @@ https://YOUR_USERNAME.github.io/lottery-till-command-center/
 
 ## 4. Frontend Sync Step
 
-The current app still saves locally first. Before team mode is truly live, wire the frontend to Supabase:
+The app now has a Supabase team login and shared snapshot sync.
 
-1. Add a Supabase browser client.
-2. Add login/logout.
-3. Replace local-only persistence with reads/writes to the Supabase tables.
-4. Keep localStorage as a backup draft cache only.
-5. Add a visible sync state: `Online synced`, `Offline draft`, or `Sync error`.
+1. Run the newest `supabase-schema.sql` in Supabase SQL Editor.
+2. In Supabase, create team users under Authentication.
+3. Upload the newest `index.html`, `styles.css`, `app.js`, and `supabase-schema.sql` to GitHub.
+4. Open the GitHub Pages URL.
+5. Sign in from the left sidebar.
+6. The app saves locally first and syncs the shared snapshot to Supabase when signed in.
 
 ## 5. Recommended Go-Live Order
 
 1. Publish the static app to GitHub Pages.
 2. Run the Supabase schema.
-3. Add Supabase Auth and database sync.
+3. Create Supabase Auth users.
 4. Test with one admin account and one employee account.
-5. Enter one full fake day and verify it appears on both computers.
+5. Enter one full fake day and verify it appears on both computers after sign-in.
 6. Only then switch the store away from Google Sheets.
 
 ## 6. Safety Rules
