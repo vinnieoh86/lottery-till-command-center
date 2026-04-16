@@ -272,11 +272,6 @@ const elements = {
 let state = loadState();
 state.businessDate = todayIso();
 state.uiSettings = { ...(state.uiSettings || {}), mobileEntryDock: "bottom" };
-if (state.orderSettings?.date !== todayIso()) {
-  state.orderSettings = { ...(state.orderSettings || {}), date: todayIso() };
-  state.orderInventory = emptyOrderInventory();
-  state.extraOrders = cloneExtraOrders();
-}
 inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
@@ -289,6 +284,9 @@ let currentSession = null;
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
+let currentUser = null;
+let pinUnlockInProgress = false;
+let lastPinTap = { key: "", at: 0 };
 let idleLockTimer = null;
 let activeMobileGameIndex = 0;
 let completedDayEditUnlocks = new Set();
@@ -327,6 +325,7 @@ function createDefaultState() {
     till: normalizeTill(),
     cashCounts: Object.fromEntries(cashDenominations.map((item) => [item.label, 0])),
     orderInventory: emptyOrderInventory(),
+    orderAudit: {},
     orderDc: Object.fromEntries([...dcBoxes].map((box) => [box, true])),
     extraOrders: cloneExtraOrders(),
     savedOrders: [],
@@ -360,6 +359,7 @@ function normalizeStoredState(parsed = {}) {
       ...(parsed.cashCounts || {}),
     },
     orderInventory: { ...emptyOrderInventory(), ...(parsed.orderInventory || {}) },
+    orderAudit: parsed.orderAudit || {},
     orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
     extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
     savedOrders: parsed.savedOrders || [],
@@ -436,6 +436,10 @@ function isUserRole() {
   return accessRole === "user";
 }
 
+function currentUserName() {
+  return currentUser?.name || (isAdminRole() ? "Admin" : isUserRole() ? "User" : "Unknown");
+}
+
 function isRoleAllowedView(view) {
   if (!accessRole) return false;
   if (isAdminRole()) return true;
@@ -448,7 +452,7 @@ function applyAccessRole(role) {
   document.body.classList.toggle("admin-mode", role === "admin");
   document.body.classList.toggle("user-mode", role === "user");
   elements.pinOverlay.hidden = Boolean(role);
-  elements.pinRoleLabel.textContent = role ? role.toUpperCase() : "Locked";
+  elements.pinRoleLabel.textContent = role ? currentUserName().toUpperCase() : "Locked";
   elements.clearActiveTabButton.hidden = !isAdminRole();
 
   elements.viewButtons.forEach((button) => {
@@ -480,37 +484,51 @@ function renderAccessControls() {
 }
 
 function unlockWithPin(pin) {
+  if (pinUnlockInProgress) return;
   const normalizedPin = String(pin || "").replace(/\D/g, "").slice(0, 4);
   const adminPin = String(state.pinSettings?.admin || "1986").replace(/\D/g, "").padStart(4, "0").slice(-4);
   const adminRecoveryPin = "1986";
-  const userPins = normalizeUsers().map((user) => String(user.pin || "").replace(/\D/g, "").padStart(4, "0").slice(-4));
+  const users = normalizeUsers();
+  const matchedUser = users.find((user) => String(user.pin || "").replace(/\D/g, "").padStart(4, "0").slice(-4) === normalizedPin);
 
   if (normalizedPin.length !== 4) return;
+  pinUnlockInProgress = true;
 
   if (normalizedPin === adminPin || normalizedPin === adminRecoveryPin) {
     elements.pinEntry.value = "";
     elements.pinMessage.textContent = "Admin access unlocked.";
+    currentUser = { name: "Admin", role: "admin" };
     applyAccessRole("admin");
     resetIdleTimer();
     render();
     setActiveView(activeView);
+    window.setTimeout(() => {
+      pinUnlockInProgress = false;
+    }, 450);
     return;
   }
 
-  if (userPins.includes(normalizedPin)) {
+  if (matchedUser) {
     elements.pinEntry.value = "";
-    elements.pinMessage.textContent = "User access unlocked.";
+    elements.pinMessage.textContent = `${matchedUser.name || "User"} access unlocked.`;
+    currentUser = { name: matchedUser.name || "User", role: "user" };
     applyAccessRole("user");
     resetIdleTimer();
     render();
     setActiveView("daily");
     focusMobileGame(0);
+    window.setTimeout(() => {
+      pinUnlockInProgress = false;
+    }, 450);
     return;
   }
 
   elements.pinMessage.textContent = "PIN not recognized. Try again.";
   elements.pinEntry.value = "";
-  window.setTimeout(() => elements.pinEntry.focus(), 50);
+  window.setTimeout(() => {
+    pinUnlockInProgress = false;
+    elements.pinEntry.focus();
+  }, 250);
 }
 
 function lockApp(message = "Enter PIN to continue.") {
@@ -519,6 +537,7 @@ function lockApp(message = "Enter PIN to continue.") {
     hydrateActiveDay();
   }
   window.clearTimeout(idleLockTimer);
+  currentUser = null;
   applyAccessRole(null);
   elements.pinEntry.value = "";
   elements.pinMessage.textContent = message;
@@ -1381,6 +1400,13 @@ function renderGames() {
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
+    const editorChip = row.querySelector(".locked-chip");
+    if (editorChip) {
+      const editedBy = entry.updatedBy || entry.completedBy || "Locked";
+      editorChip.textContent = editedBy;
+      editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
+      editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy || entry.completedBy));
+    }
 
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
@@ -1695,11 +1721,23 @@ function updateEntry(game, key, value, row) {
   }
 
   const entry = getEntry(game);
-  entry[key] = value === "" ? "" : normalizeNumber(value);
+  const nextValue = value === "" ? "" : normalizeNumber(value);
+  const changed = String(entry[key] ?? "") !== String(nextValue);
+  entry[key] = nextValue;
+  if (changed && ["todayEnding", "manualInstantSold"].includes(key)) {
+    entry.updatedBy = currentUserName();
+    entry.updatedAt = new Date().toISOString();
+  }
 
   row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
   row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
+  const editorChip = row.querySelector(".locked-chip");
+  if (editorChip) {
+    editorChip.textContent = entry.updatedBy || "Locked";
+    editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
+    editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy));
+  }
 
   persistIfLiveDate();
   renderTotals();
@@ -1767,6 +1805,13 @@ function saveDay() {
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   dayLog.completedAt = dayLog.savedAt;
+  dayLog.completedBy = currentUserName();
+  Object.values(dayLog.entries || {}).forEach((entry) => {
+    if (entry.todayEnding !== "" && entry.todayEnding !== undefined) {
+      entry.completedBy = currentUserName();
+      entry.completedAt = dayLog.savedAt;
+    }
+  });
   if (isPreviousDateDraftMode()) {
     state.dailyLogs[state.businessDate] = cloneJson(dayLog);
     previousDateDraft = null;
@@ -2010,6 +2055,7 @@ function clearActiveTab() {
     });
   } else if (activeView === "order") {
     state.orderInventory = emptyOrderInventory();
+    state.orderAudit = {};
     state.extraOrders = cloneExtraOrders();
   }
 
@@ -2288,7 +2334,12 @@ function renderOrderSheet() {
 
   elements.orderRows.querySelectorAll("[data-order-box]").forEach((input) => {
     const saveQty = (event) => {
-      state.orderInventory[event.target.dataset.orderBox] = normalizeNumber(event.target.value);
+      const id = event.target.dataset.orderBox;
+      state.orderInventory[id] = normalizeNumber(event.target.value);
+      state.orderAudit[id] = {
+        updatedBy: currentUserName(),
+        updatedAt: new Date().toISOString(),
+      };
       persistState();
       refreshOrderCalculations(orderedGames);
     };
@@ -2346,6 +2397,8 @@ function renderOrderSheet() {
     const saveExtraOrder = (event) => {
       const index = Number(event.target.dataset.extraIndex);
       state.extraOrders[index].qty = normalizeNumber(event.target.value);
+      state.extraOrders[index].updatedBy = currentUserName();
+      state.extraOrders[index].updatedAt = new Date().toISOString();
       persistState();
       refreshKeepupNeed(index);
       renderOrderReport(orderedGames);
@@ -2485,6 +2538,8 @@ function buildCurrentOrderSnapshot() {
         qty: normalizeNumber(state.orderInventory[gameId(game)]),
         need: recommendation.need,
         averageTickets: recommendation.averageTickets,
+        updatedBy: state.orderAudit[gameId(game)]?.updatedBy || "",
+        updatedAt: state.orderAudit[gameId(game)]?.updatedAt || "",
       };
     });
 
@@ -2496,18 +2551,34 @@ function buildCurrentOrderSnapshot() {
     id: `${state.orderSettings.date}-${Date.now()}`,
     date: state.orderSettings.date,
     savedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    completedBy: currentUserName(),
     totalBooks: rows.reduce((sum, row) => sum + row.need, 0),
     rows,
     extraOrders,
+    inputAudit: cloneJson(state.orderAudit || {}),
   };
 }
 
-function saveWeeklyOrder() {
+async function saveWeeklyOrder() {
+  const ok = await showAppConfirm({
+    eyebrow: "Complete order",
+    title: "Save this order and clear QTY?",
+    body: "This records the order for admin reports, then resets scratch-off and supply QTY values to 0 for the next order.",
+    confirmText: "Complete order",
+    cancelText: "Keep editing",
+  });
+  if (!ok) return;
+
   const snapshot = buildCurrentOrderSnapshot();
   state.savedOrders = [snapshot, ...(state.savedOrders || [])].slice(0, 12);
   state.orderInventory = emptyOrderInventory();
+  state.orderAudit = {};
   state.extraOrders = cloneExtraOrders();
+  state.orderSettings.date = todayIso();
+  elements.orderDate.value = state.orderSettings.date;
   persistState();
+  elements.syncStatus.textContent = "Order completed and cleared";
   renderOrderSheet();
   renderSavedOrders();
 }
@@ -2535,7 +2606,7 @@ function renderSavedOrders() {
             <summary>
               <strong>${order.date}</strong>
               <span>${order.totalBooks} books</span>
-              <small>Saved ${new Date(order.savedAt).toLocaleString()}</small>
+              <small>${order.completedBy || "Unknown"} - ${new Date(order.savedAt).toLocaleString()}</small>
             </summary>
             <table class="saved-order-detail">
               <thead><tr><th>Box</th><th>$</th><th>Game #</th><th>Game</th><th>Order</th></tr></thead>
@@ -2583,8 +2654,6 @@ elements.backstockWeeks.value = state.orderSettings.backstockWeeks;
 elements.highTicketThreshold.value = state.orderSettings.highTicketThreshold;
 elements.orderDate.addEventListener("change", (event) => {
   state.orderSettings.date = event.target.value;
-  state.orderInventory = emptyOrderInventory();
-  state.extraOrders = cloneExtraOrders();
   persistState();
   renderOrderSheet();
 });
@@ -2624,6 +2693,9 @@ elements.pinPadButtons.forEach((button) => {
     const action = button.dataset.pinAction;
 
     if (key) {
+      const now = Date.now();
+      if (lastPinTap.key === key && now - lastPinTap.at < 180) return;
+      lastPinTap = { key, at: now };
       elements.pinEntry.value = `${elements.pinEntry.value}${key}`.replace(/\D/g, "").slice(0, 4);
       if (elements.pinEntry.value.length === 4) unlockWithPin(elements.pinEntry.value);
       return;
