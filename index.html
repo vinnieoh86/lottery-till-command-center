@@ -45,7 +45,7 @@
           <p>Team login</p>
           <strong id="authUserLabel">Not signed in</strong>
           <input id="authEmail" type="email" placeholder="email" autocomplete="email" />
-          <input id="authPassword" type="password" placeholder="password" autocomplete="current-password" />
+          <input id="authPassword" class="pin-setting-input" type="text" placeholder="password" autocomplete="off" data-lpignore="true" data-form-type="other" />
           <div class="auth-actions">
             <button id="authSignInButton" type="button">Sign in</button>
             <button id="authSignUpButton" class="ghost-dark-button" type="button">Create</button>
@@ -432,35 +432,40 @@
             </div>
             <span>PINs are stored in this app state for quick store access.</span>
           </div>
-          <div class="settings-grid">
-            <label>
-              Admin PIN
-              <input id="adminPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
-            </label>
-            <label>
-              User PIN
-              <input id="userPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
-            </label>
-          </div>
           <div class="settings-card">
-            <h3>Change user PIN</h3>
-            <p>Quick employee PIN update without touching the admin PIN.</p>
+            <h3>Admin PIN</h3>
+            <p>Only changes the admin access PIN.</p>
             <div class="settings-grid">
               <label>
-                New user PIN
-                <input id="newUserPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+                New admin PIN
+                <input id="adminPinInput" class="pin-setting-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" data-lpignore="true" data-form-type="other" />
               </label>
               <label>
-                Confirm user PIN
-                <input id="confirmUserPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+                Confirm admin PIN
+                <input id="confirmAdminPinInput" class="pin-setting-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" data-lpignore="true" data-form-type="other" />
               </label>
             </div>
             <div class="settings-actions">
-              <button id="changeUserPinButton" class="ghost-button" type="button">Change user PIN</button>
+              <button id="saveAdminPinButton" type="button">Update admin PIN</button>
             </div>
           </div>
-          <div class="settings-actions">
-            <button id="savePinsButton" type="button">Save PINs</button>
+          <div class="settings-card">
+            <h3>Add user</h3>
+            <p>Add employee PINs. These users have regular user access only.</p>
+            <div class="settings-grid">
+              <label>
+                User name
+                <input id="newUserNameInput" type="text" autocomplete="off" data-lpignore="true" data-form-type="other" />
+              </label>
+              <label>
+                User PIN
+                <input id="newUserPinInput" class="pin-setting-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" data-lpignore="true" data-form-type="other" />
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button id="addUserButton" class="ghost-button" type="button">Add user</button>
+            </div>
+            <div id="userList" class="user-list"></div>
           </div>
           <p class="formula-note">
             Admin has full access. User mode can enter daily ending numbers, cash drawer counts, and order sheet quantities only.
@@ -473,7 +478,7 @@
       <div class="pin-panel">
         <p class="eyebrow">Secure entry</p>
         <h2>Enter store PIN</h2>
-        <input id="pinEntry" class="pin-entry" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" />
+        <input id="pinEntry" class="pin-entry" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" data-lpignore="true" data-form-type="other" />
         <div class="pin-pad" aria-label="PIN keypad">
           <button type="button" data-pin-key="1">1</button>
           <button type="button" data-pin-key="2">2</button>
@@ -488,7 +493,19 @@
           <button type="button" data-pin-key="0">0</button>
           <button type="button" data-pin-action="backspace">Back</button>
         </div>
-        <p id="pinMessage" class="pin-message">Admin default: 0000. User default: 1111.</p>
+        <p id="pinMessage" class="pin-message">Enter your assigned PIN.</p>
+      </div>
+    </section>
+
+    <section id="appConfirmModal" class="app-modal" hidden>
+      <div class="app-modal-card">
+        <p class="eyebrow" id="appConfirmEyebrow">Confirm</p>
+        <h2 id="appConfirmTitle">Save change?</h2>
+        <p id="appConfirmBody">Choose what to do with this change.</p>
+        <div class="app-modal-actions">
+          <button id="appConfirmCancel" class="ghost-button" type="button">No</button>
+          <button id="appConfirmOk" type="button">Yes</button>
+        </div>
       </div>
     </section>
 

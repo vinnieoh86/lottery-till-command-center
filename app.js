@@ -246,11 +246,18 @@ const elements = {
   pinLockButton: document.querySelector("#pinLockButton"),
   pinPadButtons: document.querySelectorAll("[data-pin-key], [data-pin-action]"),
   adminPinInput: document.querySelector("#adminPinInput"),
-  userPinInput: document.querySelector("#userPinInput"),
+  confirmAdminPinInput: document.querySelector("#confirmAdminPinInput"),
+  saveAdminPinButton: document.querySelector("#saveAdminPinButton"),
+  newUserNameInput: document.querySelector("#newUserNameInput"),
   newUserPinInput: document.querySelector("#newUserPinInput"),
-  confirmUserPinInput: document.querySelector("#confirmUserPinInput"),
-  savePinsButton: document.querySelector("#savePinsButton"),
-  changeUserPinButton: document.querySelector("#changeUserPinButton"),
+  addUserButton: document.querySelector("#addUserButton"),
+  userList: document.querySelector("#userList"),
+  appConfirmModal: document.querySelector("#appConfirmModal"),
+  appConfirmEyebrow: document.querySelector("#appConfirmEyebrow"),
+  appConfirmTitle: document.querySelector("#appConfirmTitle"),
+  appConfirmBody: document.querySelector("#appConfirmBody"),
+  appConfirmCancel: document.querySelector("#appConfirmCancel"),
+  appConfirmOk: document.querySelector("#appConfirmOk"),
   mobileEntryBar: document.querySelector("#mobileEntryBar"),
   mobileDockToggleButton: document.querySelector("#mobileDockToggleButton"),
   mobilePrevBoxButton: document.querySelector("#mobilePrevBoxButton"),
@@ -265,6 +272,11 @@ const elements = {
 let state = loadState();
 state.businessDate = todayIso();
 state.uiSettings = { ...(state.uiSettings || {}), mobileEntryDock: "bottom" };
+if (state.orderSettings?.date !== todayIso()) {
+  state.orderSettings = { ...(state.orderSettings || {}), date: todayIso() };
+  state.orderInventory = emptyOrderInventory();
+  state.extraOrders = cloneExtraOrders();
+}
 inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
@@ -324,8 +336,9 @@ function createDefaultState() {
       highTicketThreshold: 40,
     },
     pinSettings: {
-      admin: "0000",
+      admin: "1986",
       user: "1111",
+      users: [{ name: "User", pin: "1111" }],
     },
     uiSettings: {
       mobileEntryDock: "bottom",
@@ -356,8 +369,11 @@ function normalizeStoredState(parsed = {}) {
       highTicketThreshold: normalizeNumber(parsed.orderSettings?.highTicketThreshold) || 40,
     },
     pinSettings: {
-      admin: parsed.pinSettings?.admin || "0000",
+      admin: parsed.pinSettings?.admin || "1986",
       user: parsed.pinSettings?.user || "1111",
+      users:
+        parsed.pinSettings?.users ||
+        [{ name: "User", pin: parsed.pinSettings?.user || "1111" }],
     },
     uiSettings: {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
@@ -456,18 +472,18 @@ function renderAccessControls() {
   elements.exportButton.hidden = !admin;
   elements.seedMonthButton.hidden = !admin;
   elements.adminPinInput.value = state.pinSettings.admin;
-  elements.userPinInput.value = state.pinSettings.user;
+  elements.confirmAdminPinInput.value = "";
+  elements.newUserNameInput.value = "";
   elements.newUserPinInput.value = "";
-  elements.confirmUserPinInput.value = "";
+  renderUserList();
   renderMobileEntryBar();
 }
 
 function unlockWithPin(pin) {
   const normalizedPin = String(pin || "").replace(/\D/g, "").slice(0, 4);
-  const adminPin = String(state.pinSettings?.admin || "0000").replace(/\D/g, "").padStart(4, "0").slice(-4);
-  const userPin = String(state.pinSettings?.user || "1111").replace(/\D/g, "").padStart(4, "0").slice(-4);
-  const adminRecoveryPin = "0000";
-  const userRecoveryPin = "1111";
+  const adminPin = String(state.pinSettings?.admin || "1986").replace(/\D/g, "").padStart(4, "0").slice(-4);
+  const adminRecoveryPin = "1986";
+  const userPins = normalizeUsers().map((user) => String(user.pin || "").replace(/\D/g, "").padStart(4, "0").slice(-4));
 
   if (normalizedPin.length !== 4) return;
 
@@ -481,7 +497,7 @@ function unlockWithPin(pin) {
     return;
   }
 
-  if (normalizedPin === userPin || normalizedPin === userRecoveryPin) {
+  if (userPins.includes(normalizedPin)) {
     elements.pinEntry.value = "";
     elements.pinMessage.textContent = "User access unlocked.";
     applyAccessRole("user");
@@ -518,41 +534,74 @@ function resetIdleTimer() {
   }, IDLE_LOCK_MS);
 }
 
-function savePins() {
-  const adminPin = elements.adminPinInput.value.trim();
-  const userPin = elements.userPinInput.value.trim();
-
-  if (!/^\d{4}$/.test(adminPin) || !/^\d{4}$/.test(userPin)) {
-    elements.pinMessage.textContent = "PINs must be exactly 4 digits.";
-    return;
-  }
-
-  state.pinSettings = { admin: adminPin, user: userPin };
-  persistState();
-  elements.pinMessage.textContent = "PIN settings saved.";
+function normalizeUsers() {
+  const users = state.pinSettings?.users?.length
+    ? state.pinSettings.users
+    : [{ name: "User", pin: state.pinSettings?.user || "1111" }];
+  state.pinSettings.users = users;
+  return users;
 }
 
-function changeUserPin() {
-  const userPin = elements.newUserPinInput.value.trim();
-  const confirmPin = elements.confirmUserPinInput.value.trim();
+function renderUserList() {
+  const users = normalizeUsers();
+  elements.userList.innerHTML = users
+    .map(
+      (user, index) => `
+        <div class="user-list-row">
+          <span>${user.name || `User ${index + 1}`}</span>
+          <strong>${String(user.pin || "").padStart(4, "0").slice(-4)}</strong>
+          <button class="ghost-button" type="button" data-remove-user-index="${index}">Remove</button>
+        </div>
+      `,
+    )
+    .join("");
 
-  if (!/^\d{4}$/.test(userPin)) {
-    elements.pinMessage.textContent = "New user PIN must be exactly 4 digits.";
+  elements.userList.querySelectorAll("[data-remove-user-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.removeUserIndex);
+      state.pinSettings.users.splice(index, 1);
+      persistState();
+      renderUserList();
+    });
+  });
+}
+
+function saveAdminPin() {
+  const adminPin = elements.adminPinInput.value.trim();
+  const confirmPin = elements.confirmAdminPinInput.value.trim();
+
+  if (!/^\d{4}$/.test(adminPin)) {
+    elements.syncStatus.textContent = "Admin PIN must be exactly 4 digits";
     return;
   }
 
-  if (userPin !== confirmPin) {
-    elements.pinMessage.textContent = "User PIN confirmation does not match.";
+  if (adminPin !== confirmPin) {
+    elements.syncStatus.textContent = "Admin PIN confirmation does not match";
     return;
   }
 
-  state.pinSettings = { ...state.pinSettings, user: userPin };
-  elements.userPinInput.value = userPin;
-  elements.newUserPinInput.value = "";
-  elements.confirmUserPinInput.value = "";
+  state.pinSettings = { ...state.pinSettings, admin: adminPin };
+  elements.confirmAdminPinInput.value = "";
   persistState();
-  elements.pinMessage.textContent = "User PIN changed.";
-  elements.syncStatus.textContent = "User PIN changed";
+  elements.syncStatus.textContent = "Admin PIN updated";
+}
+
+function addUserPin() {
+  const name = elements.newUserNameInput.value.trim() || `User ${normalizeUsers().length + 1}`;
+  const pin = elements.newUserPinInput.value.trim();
+
+  if (!/^\d{4}$/.test(pin)) {
+    elements.syncStatus.textContent = "User PIN must be exactly 4 digits";
+    return;
+  }
+
+  state.pinSettings.users = [...normalizeUsers(), { name, pin }];
+  state.pinSettings.user = state.pinSettings.users[0]?.pin || "1111";
+  elements.newUserNameInput.value = "";
+  elements.newUserPinInput.value = "";
+  persistState();
+  renderUserList();
+  elements.syncStatus.textContent = `${name} added`;
 }
 
 function getTodayEndingInputs() {
@@ -1098,12 +1147,6 @@ function renderPreviousDateGuard() {
 function unlockPreviousDate() {
   if (!isSavedPastDate()) return;
 
-  const ok = window.confirm(
-    `${selectedDateLabel()} has saved data.\n\nUnlock this previous date for editing? Press Complete day when finished to relock it.`,
-  );
-
-  if (!ok) return;
-
   completedDayEditUnlocks.add(state.businessDate);
   previousDateDraft = {
     date: state.businessDate,
@@ -1116,27 +1159,10 @@ function unlockPreviousDate() {
 
 function resolvePreviousDateDraftBeforeLeaving() {
   if (!previousDateDraft) return;
-
-  const saveChanges = window.confirm(
-    `You are leaving ${selectedDateLabel(previousDateDraft.date)} with unlocked changes.\n\nOK = save all changes now.\nCancel = exit without saving changes.`,
-  );
-
   const draftDate = previousDateDraft.date;
-
-  if (saveChanges) {
-    state.dailyLogs[draftDate] = cloneJson(previousDateDraft.dayLog);
-    state.dailyLogs[draftDate].totals = buildTotals();
-    state.dailyLogs[draftDate].savedAt = new Date().toISOString();
-    state.dailyLogs[draftDate].completedAt = state.dailyLogs[draftDate].savedAt;
-    state.lastSavedAt = state.dailyLogs[draftDate].savedAt;
-    elements.syncStatus.textContent = "Previous date changes saved";
-    persistState();
-  } else {
-    elements.syncStatus.textContent = "Previous date changes discarded";
-  }
-
   previousDateDraft = null;
   completedDayEditUnlocks.delete(draftDate);
+  elements.syncStatus.textContent = "Previous date edit mode closed";
 }
 
 function canEditActiveDay(targetInput) {
@@ -1164,6 +1190,69 @@ function canEditActiveDay(targetInput) {
   if (targetInput) {
     targetInput.value = targetInput.dataset.focusValue ?? targetInput.defaultValue ?? "";
   }
+  return false;
+}
+
+function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes", cancelText = "No" }) {
+  elements.appConfirmEyebrow.textContent = eyebrow;
+  elements.appConfirmTitle.textContent = title;
+  elements.appConfirmBody.textContent = body;
+  elements.appConfirmOk.textContent = confirmText;
+  elements.appConfirmCancel.textContent = cancelText;
+  elements.appConfirmModal.hidden = false;
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      elements.appConfirmModal.hidden = true;
+      elements.appConfirmOk.removeEventListener("click", handleOk);
+      elements.appConfirmCancel.removeEventListener("click", handleCancel);
+    };
+    const handleOk = () => {
+      cleanup();
+      resolve(true);
+    };
+    const handleCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    elements.appConfirmOk.addEventListener("click", handleOk);
+    elements.appConfirmCancel.addEventListener("click", handleCancel);
+  });
+}
+
+function savePreviousDateDraftChange() {
+  if (!isPreviousDateDraftMode()) return;
+  const dayLog = getDayLog();
+  syncActiveDayDraft();
+  dayLog.totals = buildTotals();
+  dayLog.savedAt = new Date().toISOString();
+  state.dailyLogs[state.businessDate] = cloneJson(dayLog);
+  state.lastSavedAt = dayLog.savedAt;
+  previousDateDraft.dayLog = cloneJson(dayLog);
+  persistState();
+  elements.syncStatus.textContent = "Previous date change saved";
+}
+
+async function confirmPreviousDateFieldChange(field, previousValue, renderRevert) {
+  if (!isPreviousDateDraftMode()) return true;
+
+  const ok = await showAppConfirm({
+    eyebrow: "Previous date",
+    title: "Save this change?",
+    body: `${selectedDateLabel()} is unlocked. Save this entry change?`,
+    confirmText: "Save change",
+    cancelText: "Undo",
+  });
+
+  if (ok) {
+    savePreviousDateDraftChange();
+    return true;
+  }
+
+  if (field) field.value = previousValue ?? "";
+  renderRevert?.();
+  elements.syncStatus.textContent = "Previous date change undone";
   return false;
 }
 
@@ -1303,13 +1392,24 @@ function renderGames() {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
       field.addEventListener("focus", () => {
+        field.dataset.previousValue = field.value;
         if (field.dataset.field === "todayEnding") {
           activeMobileGameIndex = rowIndex;
           renderMobileEntryBar();
         }
       });
-      field.addEventListener("change", () => {
+      field.addEventListener("change", async () => {
         if (field.dataset.field !== "todayEnding") return;
+        const previousValue = field.dataset.previousValue ?? "";
+        if (isPreviousDateDraftMode()) {
+          const ok = await confirmPreviousDateFieldChange(field, previousValue, () => {
+            updateEntry(game, field.dataset.field, previousValue, row);
+            renderGames();
+            renderTotals();
+          });
+          if (!ok) return;
+          field.dataset.previousValue = field.value;
+        }
         if (!window.matchMedia("(max-width: 760px)").matches) return;
         if (suppressNextMobileAutoAdvance) {
           suppressNextMobileAutoAdvance = false;
@@ -1396,6 +1496,9 @@ function renderCashRows() {
     row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.cashCounts[item.label] ?? 0}" />`;
     const input = row.querySelector("input");
     input.disabled = isClosed || isPastLocked || (isUserRole() && !isTodayDate());
+    input.addEventListener("focus", () => {
+      input.dataset.previousValue = input.value;
+    });
     input.addEventListener("input", (event) => {
       if (!canEditActiveDay(event.target)) {
         renderCashRows();
@@ -1406,6 +1509,17 @@ function renderCashRows() {
       syncActiveDayDraft();
       persistIfLiveDate();
       renderTotals();
+    });
+    input.addEventListener("change", async () => {
+      const previousValue = input.dataset.previousValue ?? "";
+      if (!isPreviousDateDraftMode()) return;
+      const ok = await confirmPreviousDateFieldChange(input, previousValue, () => {
+        state.cashCounts[item.label] = normalizeNumber(previousValue);
+        syncActiveDayDraft();
+        renderCashRows();
+        renderTotals();
+      });
+      if (ok) input.dataset.previousValue = input.value;
     });
     input.addEventListener("keydown", handleGroupedEnterKeydown);
     elements.cashRows.appendChild(row);
@@ -1433,6 +1547,9 @@ function renderTillInputs() {
     input.disabled = isClosed || isUserRole() || isPastLocked;
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
+    input.onfocus = () => {
+      input.dataset.previousValue = input.value;
+    };
     input.oninput = (event) => {
       if (!canEditActiveDay(event.target)) {
         renderTillInputs();
@@ -1445,6 +1562,18 @@ function renderTillInputs() {
       persistIfLiveDate();
       renderTillInputs();
       renderTotals();
+    };
+    input.onchange = async () => {
+      const previousValue = input.dataset.previousValue ?? "";
+      if (!isPreviousDateDraftMode()) return;
+      const ok = await confirmPreviousDateFieldChange(input, previousValue, () => {
+        state.till[key] = normalizeNumber(previousValue);
+        state.till = normalizeTill(state.till);
+        syncActiveDayDraft();
+        renderTillInputs();
+        renderTotals();
+      });
+      if (ok) input.dataset.previousValue = input.value;
     };
     input.onkeydown = handleGroupedEnterKeydown;
   });
@@ -1632,11 +1761,6 @@ function focusFirstInputInGroup(group) {
 
 function saveDay() {
   if (selectedDateIsClosed()) return;
-
-  if (isPreviousDateDraftMode()) {
-    const ok = window.confirm(`Save all unlocked changes for ${selectedDateLabel()} and relock this date?`);
-    if (!ok) return;
-  }
 
   const dayLog = getDayLog();
   syncActiveDayDraft();
@@ -2150,7 +2274,7 @@ function renderOrderSheet() {
       <td>${game.name || "-"}</td>
       <td><label class="dc-check"><input data-dc-box="${id}" type="checkbox" ${state.orderDc[id] ? "checked" : ""} /><span>DC</span></label></td>
       <td><input class="order-qty-input" data-order-box="${id}" data-enter-group="order-qty" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.orderInventory[id] ?? 0}" /></td>
-      <td data-order-need-box="${id}" class="${recommendation.need ? "order-need" : ""}">${recommendation.need}</td>
+      <td data-order-need-box="${id}" data-label="Need" class="${recommendation.need ? "order-need" : ""}">${recommendation.need}</td>
       <td data-order-avg-box="${id}">${recommendation.averageTickets.toFixed(1)}</td>
     `;
       tbody.appendChild(row);
@@ -2459,7 +2583,10 @@ elements.backstockWeeks.value = state.orderSettings.backstockWeeks;
 elements.highTicketThreshold.value = state.orderSettings.highTicketThreshold;
 elements.orderDate.addEventListener("change", (event) => {
   state.orderSettings.date = event.target.value;
+  state.orderInventory = emptyOrderInventory();
+  state.extraOrders = cloneExtraOrders();
   persistState();
+  renderOrderSheet();
 });
 elements.backstockWeeks.addEventListener("input", (event) => {
   state.orderSettings.backstockWeeks = normalizeNumber(event.target.value);
@@ -2508,8 +2635,8 @@ elements.pinPadButtons.forEach((button) => {
   });
 });
 elements.pinLockButton.addEventListener("click", () => lockApp());
-elements.savePinsButton.addEventListener("click", savePins);
-elements.changeUserPinButton.addEventListener("click", changeUserPin);
+elements.saveAdminPinButton.addEventListener("click", saveAdminPin);
+elements.addUserButton.addEventListener("click", addUserPin);
 elements.mobileDockToggleButton.addEventListener("click", toggleMobileEntryDock);
 elements.mobilePrevBoxButton.addEventListener("click", () => focusAdjacentMobileGame(-1));
 elements.mobileNextBoxButton.addEventListener("click", () => focusAdjacentMobileGame(1));
@@ -2549,11 +2676,6 @@ document.addEventListener(
 );
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
   document.addEventListener(eventName, resetIdleTimer, { passive: true });
-});
-window.addEventListener("beforeunload", (event) => {
-  if (!previousDateDraft) return;
-  event.preventDefault();
-  event.returnValue = "";
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;

@@ -294,6 +294,11 @@ select:focus {
   font-size: 2rem;
   letter-spacing: 0.45rem;
   text-align: center;
+  -webkit-text-security: disc;
+}
+
+.pin-setting-input {
+  -webkit-text-security: disc;
 }
 
 .pin-pad {
@@ -323,6 +328,48 @@ select:focus {
   color: #e4f4ce;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
+}
+
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(21, 28, 23, 0.64);
+  backdrop-filter: blur(10px);
+}
+
+.app-modal[hidden] {
+  display: none;
+}
+
+.app-modal-card {
+  width: min(100%, 24rem);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 1.2rem;
+  padding: 1rem;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.app-modal-card h2 {
+  margin: 0.2rem 0 0.45rem;
+}
+
+.app-modal-card p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.app-modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  margin-top: 1rem;
 }
 
 .mobile-entry-bar {
@@ -1271,6 +1318,33 @@ pre {
   font-size: 0.78rem;
 }
 
+.user-list {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.user-list-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  border-radius: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  background: rgba(255, 255, 255, 0.52);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.user-list-row strong {
+  color: var(--green);
+}
+
+.user-list-row button {
+  padding: 0.38rem 0.55rem;
+  font-size: 0.7rem;
+}
+
 .compact-note {
   margin-top: 0;
 }
@@ -2062,7 +2136,7 @@ pre {
 
   .order-table td:nth-child(7) {
     grid-column: 4;
-    grid-row: 4;
+    grid-row: 3;
     border-radius: 0.65rem;
     padding: 0.28rem;
     background: rgba(255, 184, 77, 0.18);
