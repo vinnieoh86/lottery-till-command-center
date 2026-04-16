@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lottery Till Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">LT</span>
+          <div>
+            <p>Lottery Till</p>
+            <strong>Command Center</strong>
+          </div>
+        </div>
+
+        <nav class="nav-stack" aria-label="Main sections">
+          <button class="nav-link active" type="button" data-view-button="daily">Daily Entry</button>
+          <button class="nav-link" type="button" data-view-button="till">Till Balance</button>
+          <button class="nav-link" type="button" data-view-button="history">History</button>
+          <button class="nav-link" type="button" data-view-button="month">Month View</button>
+          <button class="nav-link" type="button" data-view-button="order">Order Sheet</button>
+        </nav>
+        <button id="clearActiveTabButton" class="danger-button" type="button">Clear this tab</button>
+
+        <section class="sync-card">
+          <span class="pulse"></span>
+          <div>
+            <p>Sync Mode</p>
+            <strong id="syncStatus">Local draft</strong>
+          </div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Daily close workflow</p>
+            <h1>Scratch-off sales, inventory, and drawer balance in one clean pass.</h1>
+            <p class="hero-copy">
+              Enter end ticket numbers by box, let rollover rules calculate instant
+              sales, then balance lottery totals against the cash drawer.
+            </p>
+          </div>
+          <div class="date-panel">
+            <label for="businessDate">Business date</label>
+            <input id="businessDate" type="date" />
+            <div class="month-actions">
+              <button id="previousMonthButton" class="ghost-button" type="button">Prev day</button>
+              <button id="todayButton" type="button">Today</button>
+              <button id="nextMonthButton" class="ghost-button" type="button">Next day</button>
+            </div>
+            <button id="seedMonthButton" type="button">Build selected month</button>
+          </div>
+        </header>
+
+        <section class="month-strip app-view" data-view="daily till" aria-label="Month calendar">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Auto month</p>
+              <h2 id="monthTitle">April 2026</h2>
+            </div>
+            <span>Defaults to today's date. Sundays are blacked out automatically.</span>
+          </div>
+          <div id="calendarDays" class="calendar-grid"></div>
+        </section>
+
+        <section id="daily-entry" class="panel collapsible-panel app-view" data-view="daily till">
+          <button class="section-toggle" type="button" data-toggle-target="daily-entry-body" aria-expanded="true">
+            <div>
+              <p class="eyebrow">Step 1</p>
+              <h2>Daily ticket count <span id="dailyCountDate" class="selected-date-label"></span></h2>
+            </div>
+            <span class="toggle-label">Minimize</span>
+          </button>
+          <div id="daily-entry-body" class="panel-body">
+            <div class="section-heading compact">
+              <span></span>
+            <div class="actions">
+              <span class="lock-note">Inventory fields locked for employee mode</span>
+              <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
+              <button id="saveDayButton" type="button">Save day</button>
+            </div>
+          </div>
+          <div id="closedDayNotice" class="closed-day-notice" hidden>
+            This date is marked closed. Daily entry is disabled to prevent accidental Sunday counts.
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Box</th>
+                  <th>Book #</th>
+                  <th>Game</th>
+                  <th>$</th>
+                  <th>Yesterday</th>
+                  <th>Today ending #</th>
+                  <th>Tickets sold</th>
+                  <th>Auto sales</th>
+                  <th>Manual instant sold</th>
+                  <th>Month tickets</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="gameRows"></tbody>
+            </table>
+          </div>
+          </div>
+        </section>
+
+        <section class="metrics-grid app-view" data-view="daily till" aria-label="Daily totals">
+          <article id="instantSalesCard" class="metric-card">
+            <span>Instant sales</span>
+            <strong id="instantSalesTotal">$0.00</strong>
+          </article>
+          <article id="manualInstantCard" class="metric-card">
+            <span>Manual instant sold</span>
+            <strong id="manualInstantTotal">$0.00</strong>
+          </article>
+          <article class="metric-card">
+            <span>Tickets sold</span>
+            <strong id="ticketsSoldTotal">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>Active books</span>
+            <strong id="activeBooksTotal">0</strong>
+          </article>
+          <article class="metric-card warning">
+            <span>Difference</span>
+            <strong id="differenceTotal">$0.00</strong>
+          </article>
+        </section>
+
+        <section id="instantMismatchAlert" class="alert-card app-view" data-view="daily till" hidden>
+          <strong>Instant sales mismatch</strong>
+          <span id="instantMismatchText"></span>
+          <button id="reconcileButton" type="button">Reconcile printout</button>
+        </section>
+
+        <section id="reconcilePanel" class="panel reconcile-panel app-view" data-view="daily till" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Printout check</p>
+              <h2>Sold games sorted by book #</h2>
+            </div>
+            <span>Zero-sale books are hidden for faster Ohio Lottery printout matching.</span>
+          </div>
+          <div class="table-wrap">
+            <table class="reconcile-table">
+              <thead>
+                <tr>
+                  <th>Book #</th>
+                  <th>Box</th>
+                  <th>Game</th>
+                  <th>$</th>
+                  <th>Tickets</th>
+                  <th>Auto sales</th>
+                  <th>Manual printout</th>
+                  <th>Variance</th>
+                </tr>
+              </thead>
+              <tbody id="reconcileRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="till" class="panel split-panel app-view" data-view="daily till">
+          <div>
+            <button class="section-toggle" type="button" data-toggle-target="lottery-totals-body" aria-expanded="true">
+              <div>
+                <p class="eyebrow">Step 2</p>
+                <h2>Lottery totals</h2>
+              </div>
+              <span class="toggle-label">Minimize</span>
+            </button>
+            <div id="lottery-totals-body" class="panel-body">
+            <div class="form-grid">
+              <label>
+                Gross sales
+                <input id="grossSales" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Online cancels
+                <input id="onlineCancels" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Online cashes
+                <input id="onlineCashes" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Cashless online sale
+                <input id="cashlessOnlineOnlySales" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Instant cashes
+                <input id="instantCashes" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Cashless instant sales
+                <input id="cashlessInstantSales" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Cashless total
+                <input id="cashlessOnlineSales" type="number" min="0" step="0.01" inputmode="decimal" readonly />
+              </label>
+              <label>
+                Office payout
+                <input id="officePayout" type="number" min="0" step="0.01" inputmode="decimal" />
+              </label>
+              <label>
+                Adjustments
+                <input id="adjustments" type="number" step="0.01" inputmode="decimal" />
+              </label>
+            </div>
+            <p class="formula-note">
+              Total lottery sales = gross - cancels - online cashes - instant cashes - cashless total - adjustments + office payout + instant sales.
+            </p>
+            </div>
+          </div>
+
+          <div>
+            <button class="section-toggle" type="button" data-toggle-target="cash-drawer-body" aria-expanded="true">
+              <div>
+                <p class="eyebrow">Step 3</p>
+                <h2>Cash drawer</h2>
+              </div>
+              <span class="toggle-label">Minimize</span>
+            </button>
+            <div id="cash-drawer-body" class="panel-body">
+            <div class="cash-grid" id="cashRows"></div>
+            <div class="drawer-total">
+              <span>Cash in drawer</span>
+              <strong id="cashDrawerTotal">$0.00</strong>
+            </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="reports" class="panel report-panel app-view" data-view="daily till">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Close summary</p>
+              <h2>Today's balancing report</h2>
+            </div>
+            <button id="exportButton" class="ghost-button" type="button">Export JSON</button>
+          </div>
+          <div class="report-grid">
+            <div>
+              <span>Total lottery sales</span>
+              <strong id="lotterySalesTotal">$0.00</strong>
+            </div>
+            <div>
+              <span>Cash drawer</span>
+              <strong id="reportDrawerTotal">$0.00</strong>
+            </div>
+            <div>
+              <span>+/- difference</span>
+              <strong id="reportDifferenceTotal">$0.00</strong>
+            </div>
+          </div>
+          <pre id="auditLog" class="audit-log" aria-live="polite" hidden></pre>
+        </section>
+
+        <section id="history" class="panel report-panel app-view" data-view="history">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Weekly / monthly view</p>
+              <h2>Game totals and ordering signal</h2>
+            </div>
+            <span>Based on saved daily logs for the selected calendar month.</span>
+          </div>
+          <div class="summary-tabs" role="tablist" aria-label="Report range">
+            <button id="weekViewButton" type="button">Selected week</button>
+            <button id="monthViewButton" class="ghost-button" type="button">Month</button>
+          </div>
+          <div class="summary-filters">
+            <label>
+              Book value
+              <select id="summaryValueFilter">
+                <option value="all">All values</option>
+                <option value="1">$1</option>
+                <option value="2">$2</option>
+                <option value="5">$5</option>
+                <option value="10">$10</option>
+                <option value="20">$20</option>
+                <option value="30">$30</option>
+                <option value="50">$50</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table class="summary-table">
+              <thead>
+                <tr>
+                  <th><button type="button" class="sort-header" data-sort-key="box">Box</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="bookNumber">Book #</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="name">Game</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="value">$</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="tickets">Tickets</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="booksSold">Books sold</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="sales">Auto sales</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="manualInstantSold">Manual instant sold</button></th>
+                  <th><button type="button" class="sort-header" data-sort-key="savedDays">Saved days</button></th>
+                </tr>
+              </thead>
+              <tbody id="summaryRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="month-analysis" class="panel report-panel app-view" data-view="month">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Month view</p>
+              <h2>Book endings and sales by day</h2>
+            </div>
+            <span>Grouped by ticket value for ordering analysis.</span>
+          </div>
+          <div class="summary-filters">
+            <label>
+              Book value
+              <select id="monthValueFilter">
+                <option value="all">All values</option>
+                <option value="1">$1</option>
+                <option value="2">$2</option>
+                <option value="5">$5</option>
+                <option value="10">$10</option>
+                <option value="20">$20</option>
+                <option value="30">$30</option>
+                <option value="50">$50</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap month-matrix-wrap">
+            <table class="month-matrix-table">
+              <thead id="monthMatrixHead"></thead>
+              <tbody id="monthMatrixRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="order-sheet" class="panel report-panel app-view" data-view="order">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Reorder</p>
+              <h2>Lottery reorder and inventory sheet</h2>
+            </div>
+            <span>Uses saved sales to estimate 2.5 weeks of backstock.</span>
+          </div>
+          <div class="order-controls">
+            <label>
+              Reorder date
+              <input id="orderDate" type="date" />
+            </label>
+            <label>
+              Backstock weeks
+              <input id="backstockWeeks" type="number" min="0" step="0.5" value="2.5" />
+            </label>
+            <label>
+              High ticket threshold
+              <input id="highTicketThreshold" type="number" min="0" step="1" value="40" />
+            </label>
+          </div>
+          <div class="order-grid">
+            <div id="orderRows" class="order-block-grid"></div>
+            <div id="extraBooksRows" class="keepup-table-wrap"></div>
+          </div>
+          <div class="order-invoice-card">
+            <div class="section-heading compact">
+              <div>
+                <p class="eyebrow">Actual order invoice</p>
+                <h2>Books to order</h2>
+              </div>
+              <span>Includes game # for ordering.</span>
+            </div>
+            <div id="orderReportRows" class="order-report-grid"></div>
+          </div>
+          <div class="saved-orders-card">
+            <h3>Saved weekly order sheets</h3>
+            <p class="save-location-note">Saved in this browser for now. The Supabase tables are ready for team-sync wiring next.</p>
+            <button id="saveWeeklyOrderButton" type="button">Save weekly order</button>
+            <div id="savedOrderRows" class="saved-order-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="gameRowTemplate">
+      <tr>
+        <td data-static="box"></td>
+        <td data-static="bookNumber"></td>
+        <td data-static="name"></td>
+        <td>
+          <span data-static="value" class="pill-value"></span>
+        </td>
+        <td data-output="previousEnding">0</td>
+        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" /></td>
+        <td data-output="ticketsSold">0</td>
+        <td data-output="sales">$0.00</td>
+        <td><input data-field="manualInstantSold" class="manual-instant-input" type="number" min="0" step="1" inputmode="decimal" /></td>
+        <td data-output="runningTickets">0</td>
+        <td><span class="locked-chip">Locked</span></td>
+      </tr>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
