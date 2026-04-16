@@ -1,5 +1,6 @@
 const STORAGE_KEY = "lotteryTillState:v2";
 const CLOUD_STORE_KEY = "lottery-till-main";
+const IDLE_LOCK_MS = 180000;
 const SUPABASE_URL = "https://psngcbeffraghwwuihsk.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzbmdjYmVmZnJhZ2h3d3VpaHNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyOTE2NzYsImV4cCI6MjA5MTg2NzY3Nn0.FzLgqimL1vrwX1PEx4zVTqyfwgKqKrOs9ueVfIXSAKw";
@@ -244,6 +245,10 @@ const elements = {
   adminPinInput: document.querySelector("#adminPinInput"),
   userPinInput: document.querySelector("#userPinInput"),
   savePinsButton: document.querySelector("#savePinsButton"),
+  mobileEntryBar: document.querySelector("#mobileEntryBar"),
+  mobilePrevBoxButton: document.querySelector("#mobilePrevBoxButton"),
+  mobileNextBoxButton: document.querySelector("#mobileNextBoxButton"),
+  mobileBoxProgress: document.querySelector("#mobileBoxProgress"),
   viewButtons: document.querySelectorAll("[data-view-button]"),
   appViews: document.querySelectorAll("[data-view]"),
   sortHeaders: document.querySelectorAll("[data-sort-key]"),
@@ -263,6 +268,8 @@ let currentSession = null;
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
+let idleLockTimer = null;
+let activeMobileGameIndex = 0;
 
 function todayIso() {
   const today = new Date();
@@ -432,36 +439,57 @@ function renderAccessControls() {
   elements.seedMonthButton.hidden = !admin;
   elements.adminPinInput.value = state.pinSettings.admin;
   elements.userPinInput.value = state.pinSettings.user;
+  renderMobileEntryBar();
 }
 
 function unlockWithPin(pin) {
-  if (pin === state.pinSettings.admin) {
+  const normalizedPin = String(pin || "").replace(/\D/g, "").slice(0, 4);
+  const adminPin = String(state.pinSettings?.admin || "0000").replace(/\D/g, "").padStart(4, "0").slice(-4);
+  const userPin = String(state.pinSettings?.user || "1111").replace(/\D/g, "").padStart(4, "0").slice(-4);
+
+  if (normalizedPin.length !== 4) return;
+
+  if (normalizedPin === adminPin) {
     elements.pinEntry.value = "";
     elements.pinMessage.textContent = "Admin access unlocked.";
     applyAccessRole("admin");
+    resetIdleTimer();
     render();
     setActiveView(activeView);
     return;
   }
 
-  if (pin === state.pinSettings.user) {
+  if (normalizedPin === userPin) {
     elements.pinEntry.value = "";
     elements.pinMessage.textContent = "User access unlocked.";
     applyAccessRole("user");
+    resetIdleTimer();
     render();
     setActiveView("daily");
+    focusMobileGame(0);
     return;
   }
 
   elements.pinMessage.textContent = "PIN not recognized. Try again.";
   elements.pinEntry.value = "";
+  window.setTimeout(() => elements.pinEntry.focus(), 50);
 }
 
-function lockApp() {
+function lockApp(message = "Enter PIN to continue.") {
+  window.clearTimeout(idleLockTimer);
   applyAccessRole(null);
   elements.pinEntry.value = "";
-  elements.pinMessage.textContent = "Enter PIN to continue.";
+  elements.pinMessage.textContent = message;
   window.setTimeout(() => elements.pinEntry.focus(), 50);
+}
+
+function resetIdleTimer() {
+  window.clearTimeout(idleLockTimer);
+  if (!accessRole) return;
+
+  idleLockTimer = window.setTimeout(() => {
+    lockApp("Locked after 3 minutes idle.");
+  }, IDLE_LOCK_MS);
 }
 
 function savePins() {
@@ -476,6 +504,38 @@ function savePins() {
   state.pinSettings = { admin: adminPin, user: userPin };
   persistState();
   elements.pinMessage.textContent = "PIN settings saved.";
+}
+
+function getTodayEndingInputs() {
+  return Array.from(elements.gameRows.querySelectorAll("[data-field='todayEnding']:not(:disabled)"));
+}
+
+function renderMobileEntryBar() {
+  const showBar = Boolean(accessRole) && activeView === "daily";
+  elements.mobileEntryBar.hidden = !showBar;
+  if (!showBar) return;
+
+  const total = inventory.length;
+  const safeIndex = Math.min(Math.max(activeMobileGameIndex, 0), Math.max(total - 1, 0));
+  const game = inventory[safeIndex];
+  elements.mobileBoxProgress.textContent = game ? `Box ${game.box} (${safeIndex + 1}/${total})` : "No boxes";
+  elements.mobilePrevBoxButton.disabled = safeIndex <= 0;
+  elements.mobileNextBoxButton.disabled = safeIndex >= total - 1;
+}
+
+function focusMobileGame(index) {
+  const inputs = getTodayEndingInputs();
+  if (!inputs.length) return;
+
+  activeMobileGameIndex = Math.min(Math.max(index, 0), inputs.length - 1);
+  const input = inputs[activeMobileGameIndex];
+  input.focus();
+  input.scrollIntoView({ behavior: "smooth", block: "center" });
+  renderMobileEntryBar();
+}
+
+function focusAdjacentMobileGame(direction) {
+  focusMobileGame(activeMobileGameIndex + direction);
 }
 
 function scheduleCloudSave() {
@@ -1033,6 +1093,12 @@ function renderGames() {
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
+      field.addEventListener("focus", () => {
+        if (field.dataset.field === "todayEnding") {
+          activeMobileGameIndex = rowIndex;
+          renderMobileEntryBar();
+        }
+      });
       field.addEventListener("keydown", (event) => handleEntryKeydown(event, row, field.dataset.field));
     });
 
@@ -1534,6 +1600,8 @@ function setActiveView(view, shouldScroll = false) {
     const target = targetMap[view];
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+
+  renderMobileEntryBar();
 }
 
 function clearActiveTab() {
@@ -2179,8 +2247,10 @@ elements.pinPadButtons.forEach((button) => {
     elements.pinEntry.focus();
   });
 });
-elements.pinLockButton.addEventListener("click", lockApp);
+elements.pinLockButton.addEventListener("click", () => lockApp());
 elements.savePinsButton.addEventListener("click", savePins);
+elements.mobilePrevBoxButton.addEventListener("click", () => focusAdjacentMobileGame(-1));
+elements.mobileNextBoxButton.addEventListener("click", () => focusAdjacentMobileGame(1));
 elements.viewButtons.forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.viewButton, true));
 });
@@ -2192,6 +2262,7 @@ elements.sortHeaders.forEach((button) => {
   button.addEventListener("click", () => setSummarySortFromHeader(button.dataset.sortKey));
 });
 document.addEventListener("focusin", (event) => {
+  resetIdleTimer();
   if (event.target.matches("input:not([type='checkbox']):not([type='date']), select, textarea")) {
     event.target.dataset.focusValue = event.target.value;
   }
@@ -2203,6 +2274,9 @@ document.addEventListener("focusin", (event) => {
       // Some browser input types do not expose selectable text.
     }
   }
+});
+["pointerdown", "keydown", "touchstart"].forEach((eventName) => {
+  document.addEventListener(eventName, resetIdleTimer, { passive: true });
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
