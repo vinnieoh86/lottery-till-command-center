@@ -29,6 +29,7 @@
           <button class="nav-link" type="button" data-view-button="history">History</button>
           <button class="nav-link" type="button" data-view-button="month">Month View</button>
           <button class="nav-link" type="button" data-view-button="order">Order Sheet</button>
+          <button class="nav-link admin-only" type="button" data-view-button="settings">Settings</button>
         </nav>
         <button id="clearActiveTabButton" class="danger-button" type="button">Clear this tab</button>
 
@@ -51,6 +52,12 @@
           </div>
           <button id="cloudSyncButton" class="ghost-dark-button" type="button">Sync now</button>
           <button id="authSignOutButton" class="ghost-dark-button" type="button" hidden>Sign out</button>
+        </section>
+
+        <section class="pin-status-card">
+          <p>App role</p>
+          <strong id="pinRoleLabel">Locked</strong>
+          <button id="pinLockButton" class="ghost-dark-button" type="button">Lock app</button>
         </section>
       </aside>
 
@@ -405,8 +412,57 @@
             <div id="savedOrderRows" class="saved-order-list"></div>
           </div>
         </section>
+
+        <section id="settings" class="panel report-panel app-view admin-only" data-view="settings">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Admin</p>
+              <h2>Settings and PIN access</h2>
+            </div>
+            <span>PINs are stored in this app state for quick store access.</span>
+          </div>
+          <div class="settings-grid">
+            <label>
+              Admin PIN
+              <input id="adminPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+            </label>
+            <label>
+              User PIN
+              <input id="userPinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" />
+            </label>
+          </div>
+          <div class="settings-actions">
+            <button id="savePinsButton" type="button">Save PINs</button>
+          </div>
+          <p class="formula-note">
+            Admin has full access. User mode can enter daily ending numbers, cash drawer counts, and order sheet quantities only.
+          </p>
+        </section>
       </main>
     </div>
+
+    <section id="pinOverlay" class="pin-overlay" aria-modal="true" role="dialog">
+      <div class="pin-panel">
+        <p class="eyebrow">Secure entry</p>
+        <h2>Enter store PIN</h2>
+        <input id="pinEntry" class="pin-entry" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" />
+        <div class="pin-pad" aria-label="PIN keypad">
+          <button type="button" data-pin-key="1">1</button>
+          <button type="button" data-pin-key="2">2</button>
+          <button type="button" data-pin-key="3">3</button>
+          <button type="button" data-pin-key="4">4</button>
+          <button type="button" data-pin-key="5">5</button>
+          <button type="button" data-pin-key="6">6</button>
+          <button type="button" data-pin-key="7">7</button>
+          <button type="button" data-pin-key="8">8</button>
+          <button type="button" data-pin-key="9">9</button>
+          <button type="button" data-pin-action="clear">Clear</button>
+          <button type="button" data-pin-key="0">0</button>
+          <button type="button" data-pin-action="backspace">Back</button>
+        </div>
+        <p id="pinMessage" class="pin-message">Admin default: 0000. User default: 1111.</p>
+      </div>
+    </section>
 
     <template id="gameRowTemplate">
       <tr>
@@ -417,7 +473,7 @@
           <span data-static="value" class="pill-value"></span>
         </td>
         <td data-output="previousEnding">0</td>
-        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" /></td>
+        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" /></td>
         <td data-output="ticketsSold">0</td>
         <td data-output="sales">$0.00</td>
         <td><input data-field="manualInstantSold" class="manual-instant-input" type="number" min="0" step="1" inputmode="decimal" /></td>

@@ -235,6 +235,15 @@ const elements = {
   authSignUpButton: document.querySelector("#authSignUpButton"),
   authSignOutButton: document.querySelector("#authSignOutButton"),
   cloudSyncButton: document.querySelector("#cloudSyncButton"),
+  pinOverlay: document.querySelector("#pinOverlay"),
+  pinEntry: document.querySelector("#pinEntry"),
+  pinMessage: document.querySelector("#pinMessage"),
+  pinRoleLabel: document.querySelector("#pinRoleLabel"),
+  pinLockButton: document.querySelector("#pinLockButton"),
+  pinPadButtons: document.querySelectorAll("[data-pin-key], [data-pin-action]"),
+  adminPinInput: document.querySelector("#adminPinInput"),
+  userPinInput: document.querySelector("#userPinInput"),
+  savePinsButton: document.querySelector("#savePinsButton"),
   viewButtons: document.querySelectorAll("[data-view-button]"),
   appViews: document.querySelectorAll("[data-view]"),
   sortHeaders: document.querySelectorAll("[data-sort-key]"),
@@ -253,6 +262,7 @@ let reconcileVisible = false;
 let currentSession = null;
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
+let accessRole = null;
 
 function todayIso() {
   const today = new Date();
@@ -294,6 +304,10 @@ function createDefaultState() {
       backstockWeeks: 2.5,
       highTicketThreshold: 40,
     },
+    pinSettings: {
+      admin: "0000",
+      user: "1111",
+    },
     lastSavedAt: null,
   };
 }
@@ -318,6 +332,10 @@ function normalizeStoredState(parsed = {}) {
       date: parsed.orderSettings?.date || todayIso(),
       backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
       highTicketThreshold: normalizeNumber(parsed.orderSettings?.highTicketThreshold) || 40,
+    },
+    pinSettings: {
+      admin: parsed.pinSettings?.admin || "0000",
+      user: parsed.pinSettings?.user || "1111",
     },
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
@@ -367,6 +385,97 @@ function renderAuthState() {
   } else if (!email) {
     setSyncStatus("Local draft");
   }
+}
+
+function isAdminRole() {
+  return accessRole === "admin";
+}
+
+function isUserRole() {
+  return accessRole === "user";
+}
+
+function isRoleAllowedView(view) {
+  if (!accessRole) return false;
+  if (isAdminRole()) return true;
+  return ["daily", "till", "order"].includes(view);
+}
+
+function applyAccessRole(role) {
+  accessRole = role;
+  document.body.classList.toggle("app-locked", !role);
+  document.body.classList.toggle("admin-mode", role === "admin");
+  document.body.classList.toggle("user-mode", role === "user");
+  elements.pinOverlay.hidden = Boolean(role);
+  elements.pinRoleLabel.textContent = role ? role.toUpperCase() : "Locked";
+  elements.clearActiveTabButton.hidden = !isAdminRole();
+
+  elements.viewButtons.forEach((button) => {
+    const allowed = isRoleAllowedView(button.dataset.viewButton);
+    button.hidden = !allowed;
+    button.disabled = !allowed;
+  });
+
+  if (role && !isRoleAllowedView(activeView)) {
+    setActiveView("daily");
+  }
+
+  renderAccessControls();
+}
+
+function renderAccessControls() {
+  const admin = isAdminRole();
+  const user = isUserRole();
+  elements.editInventoryButton.hidden = !admin;
+  elements.saveDayButton.hidden = user;
+  elements.exportButton.hidden = !admin;
+  elements.seedMonthButton.hidden = !admin;
+  elements.adminPinInput.value = state.pinSettings.admin;
+  elements.userPinInput.value = state.pinSettings.user;
+}
+
+function unlockWithPin(pin) {
+  if (pin === state.pinSettings.admin) {
+    elements.pinEntry.value = "";
+    elements.pinMessage.textContent = "Admin access unlocked.";
+    applyAccessRole("admin");
+    render();
+    setActiveView(activeView);
+    return;
+  }
+
+  if (pin === state.pinSettings.user) {
+    elements.pinEntry.value = "";
+    elements.pinMessage.textContent = "User access unlocked.";
+    applyAccessRole("user");
+    render();
+    setActiveView("daily");
+    return;
+  }
+
+  elements.pinMessage.textContent = "PIN not recognized. Try again.";
+  elements.pinEntry.value = "";
+}
+
+function lockApp() {
+  applyAccessRole(null);
+  elements.pinEntry.value = "";
+  elements.pinMessage.textContent = "Enter PIN to continue.";
+  window.setTimeout(() => elements.pinEntry.focus(), 50);
+}
+
+function savePins() {
+  const adminPin = elements.adminPinInput.value.trim();
+  const userPin = elements.userPinInput.value.trim();
+
+  if (!/^\d{4}$/.test(adminPin) || !/^\d{4}$/.test(userPin)) {
+    elements.pinMessage.textContent = "PINs must be exactly 4 digits.";
+    return;
+  }
+
+  state.pinSettings = { admin: adminPin, user: userPin };
+  persistState();
+  elements.pinMessage.textContent = "PIN settings saved.";
 }
 
 function scheduleCloudSave() {
@@ -920,7 +1029,7 @@ function renderGames() {
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
 
     row.querySelectorAll("[data-field]").forEach((field) => {
-      field.disabled = isClosed;
+      field.disabled = isClosed || (isUserRole() && field.dataset.field !== "todayEnding");
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
@@ -999,7 +1108,7 @@ function renderCashRows() {
   cashDenominations.forEach((item, index) => {
     const row = document.createElement("label");
     row.className = "cash-row";
-    row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" value="${state.cashCounts[item.label] ?? 0}" />`;
+    row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.cashCounts[item.label] ?? 0}" />`;
     const input = row.querySelector("input");
     input.disabled = isClosed;
     input.addEventListener("input", (event) => {
@@ -1031,7 +1140,7 @@ function renderTillInputs() {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
     input.value = state.till[key] ?? 0;
-    input.disabled = isClosed;
+    input.disabled = isClosed || isUserRole();
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.oninput = (event) => {
@@ -1401,6 +1510,10 @@ function setupSectionToggles() {
 }
 
 function setActiveView(view, shouldScroll = false) {
+  if (!isRoleAllowedView(view)) {
+    view = "daily";
+  }
+
   activeView = view;
   elements.viewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.viewButton === view);
@@ -1658,6 +1771,9 @@ function renderMonthMatrix() {
 }
 
 function renderOrderSheet() {
+  elements.orderDate.disabled = isUserRole();
+  elements.backstockWeeks.disabled = isUserRole();
+  elements.highTicketThreshold.disabled = isUserRole();
   const orderedGames = inventory
     .filter((game) => game.value !== "")
     .sort((a, b) => normalizeNumber(a.value) - normalizeNumber(b.value) || String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
@@ -1711,7 +1827,7 @@ function renderOrderSheet() {
       <td>${game.bookNumber || "-"}</td>
       <td>${game.name || "-"}</td>
       <td><label class="dc-check"><input data-dc-box="${id}" type="checkbox" ${state.orderDc[id] ? "checked" : ""} /><span>DC</span></label></td>
-      <td><input class="order-qty-input" data-order-box="${id}" data-enter-group="order-qty" data-enter-index="${index}" type="number" min="0" step="1" value="${state.orderInventory[id] ?? 0}" /></td>
+      <td><input class="order-qty-input" data-order-box="${id}" data-enter-group="order-qty" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.orderInventory[id] ?? 0}" /></td>
       <td data-order-need-box="${id}" class="${recommendation.need ? "order-need" : ""}">${recommendation.need}</td>
       <td data-order-avg-box="${id}">${recommendation.averageTickets.toFixed(1)}</td>
     `;
@@ -1737,6 +1853,7 @@ function renderOrderSheet() {
   });
 
   elements.orderRows.querySelectorAll("[data-dc-box]").forEach((input) => {
+    input.disabled = isUserRole();
     input.addEventListener("change", (event) => {
       state.orderDc[event.target.dataset.dcBox] = event.target.checked;
       persistState();
@@ -1755,7 +1872,7 @@ function renderOrderSheet() {
         <tr>
           <td>${item.name}</td>
           <td>${keepLabel}</td>
-          <td><input data-extra-index="${index}" data-extra-field="qty" data-enter-group="extra-orders" data-enter-index="${index}" type="number" min="0" step="1" value="${item.qty ?? 0}" /></td>
+          <td><input data-extra-index="${index}" data-extra-field="qty" data-enter-group="extra-orders" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${item.qty ?? 0}" /></td>
           <td data-extra-need-index="${index}" class="${orderNeeded ? "order-need" : ""}">${orderNeeded}</td>
         </tr>
       `;
@@ -2038,6 +2155,32 @@ elements.authSignOutButton.addEventListener("click", signOutOfCloud);
 elements.cloudSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
+elements.pinEntry.addEventListener("input", (event) => {
+  const value = event.target.value.replace(/\D/g, "").slice(0, 4);
+  event.target.value = value;
+  if (value.length === 4) unlockWithPin(value);
+});
+elements.pinEntry.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") unlockWithPin(elements.pinEntry.value);
+});
+elements.pinPadButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const key = button.dataset.pinKey;
+    const action = button.dataset.pinAction;
+
+    if (key) {
+      elements.pinEntry.value = `${elements.pinEntry.value}${key}`.replace(/\D/g, "").slice(0, 4);
+      if (elements.pinEntry.value.length === 4) unlockWithPin(elements.pinEntry.value);
+      return;
+    }
+
+    if (action === "clear") elements.pinEntry.value = "";
+    if (action === "backspace") elements.pinEntry.value = elements.pinEntry.value.slice(0, -1);
+    elements.pinEntry.focus();
+  });
+});
+elements.pinLockButton.addEventListener("click", lockApp);
+elements.savePinsButton.addEventListener("click", savePins);
 elements.viewButtons.forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.viewButton, true));
 });
@@ -2077,6 +2220,8 @@ seedApril2026SheetData();
 hydrateActiveDay();
 updateSortHeaderState();
 render();
+applyAccessRole(null);
 setActiveView(activeView);
 initCloudSync();
+window.setTimeout(() => elements.pinEntry.focus(), 50);
 
