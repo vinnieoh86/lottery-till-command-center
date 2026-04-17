@@ -237,6 +237,7 @@ const elements = {
   clearActiveTabButton: document.querySelector("#clearActiveTabButton"),
   authEmail: document.querySelector("#authEmail"),
   authPassword: document.querySelector("#authPassword"),
+  authActions: document.querySelector("#authActions"),
   authUserLabel: document.querySelector("#authUserLabel"),
   authSignInButton: document.querySelector("#authSignInButton"),
   authSignUpButton: document.querySelector("#authSignUpButton"),
@@ -423,6 +424,9 @@ function setSyncStatus(message) {
 function renderAuthState() {
   const email = currentSession?.user?.email;
   elements.authUserLabel.textContent = email || "Not signed in";
+  elements.authEmail.hidden = Boolean(email);
+  elements.authPassword.hidden = Boolean(email);
+  elements.authActions.hidden = Boolean(email);
   elements.authSignOutButton.hidden = !email;
   elements.cloudSyncButton.disabled = !email;
   elements.headerSyncButton.disabled = !email;
@@ -520,7 +524,7 @@ function unlockWithPin(pin) {
     setActiveView(activeView);
     window.setTimeout(() => {
       pinUnlockInProgress = false;
-    }, 450);
+    }, 180);
     return;
   }
 
@@ -535,7 +539,7 @@ function unlockWithPin(pin) {
     focusMobileGame(0);
     window.setTimeout(() => {
       pinUnlockInProgress = false;
-    }, 450);
+    }, 180);
     return;
   }
 
@@ -1196,6 +1200,11 @@ function isPastDateLocked(date = state.businessDate) {
   return isSavedPastDate(date) && !isAdminRole();
 }
 
+function isActiveDayLockedForRole(date = state.businessDate) {
+  if (isAdminRole()) return false;
+  return isClosedDate(date) || isCompletedDay(date) || isPastDateLocked(date);
+}
+
 function isPreviousDateDraftMode(date = state.businessDate) {
   return previousDateDraft?.date === date;
 }
@@ -1225,7 +1234,7 @@ function resolvePreviousDateDraftBeforeLeaving() {
 }
 
 function ensurePreviousDateDraft() {
-  if (!isAdminRole() || !isSavedPastDate()) return;
+  if (!isAdminRole() || (!isSavedPastDate() && !isCompletedDay())) return;
   if (previousDateDraft?.date === state.businessDate) return;
   previousDateDraft = {
     date: state.businessDate,
@@ -1239,6 +1248,13 @@ function canEditActiveDay(targetInput) {
   const isProtectedDate = Boolean(dayLog?.savedAt && !isToday) || isCompletedDay();
 
   if (!isProtectedDate) return true;
+  if (isUserRole()) {
+    if (targetInput) {
+      targetInput.value = targetInput.dataset.focusValue ?? targetInput.defaultValue ?? "";
+    }
+    elements.syncStatus.textContent = "Completed day locked";
+    return false;
+  }
   if (isAdminRole()) {
     ensurePreviousDateDraft();
     return true;
@@ -1358,7 +1374,11 @@ function renderCalendar() {
     if (dayLog?.savedAt) card.classList.add("saved");
     if (dayLog?.completedAt) card.classList.add("completed");
     const status = dayLog?.completedAt ? "<small>Done</small>" : dayLog?.savedAt ? "<small>Draft</small>" : "";
-    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}`;
+    const varianceBadge =
+      isAdminRole() && dayLog?.savedAt
+        ? `<em class="day-variance ${getSavedDayTotals(isoDate).variance < 0 ? "negative" : "positive"}">${getSavedDayTotals(isoDate).variance >= 0 ? "+" : ""}${currency.format(getSavedDayTotals(isoDate).variance)}</em>`
+        : "";
+    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}${varianceBadge}`;
     card.addEventListener("click", () => switchDate(isoDate));
     elements.calendarDays.appendChild(card);
   }
@@ -1405,9 +1425,9 @@ function formatGameValue(game) {
 function renderGames() {
   elements.gameRows.innerHTML = "";
   const isClosed = selectedDateIsClosed();
-  const isPastLocked = isPastDateLocked();
+  const isLocked = isActiveDayLockedForRole();
   elements.closedDayNotice.hidden = !isClosed;
-  elements.saveDayButton.disabled = isClosed || isPastLocked || (isSavedPastDate() && isUserRole());
+  elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
 
   inventory.forEach((game, rowIndex) => {
     const entry = getEntry(game);
@@ -1457,8 +1477,7 @@ function renderGames() {
 
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
-        isClosed ||
-        isPastLocked ||
+        isLocked ||
         (isUserRole() && field.dataset.field !== "todayEnding") ||
         (isUserRole() && !isTodayDate());
       field.addEventListener("input", (event) => {
@@ -1560,15 +1579,14 @@ function reorderInventory(fromId, toId) {
 
 function renderCashRows() {
   elements.cashRows.innerHTML = "";
-  const isClosed = selectedDateIsClosed();
-  const isPastLocked = isPastDateLocked();
+  const isLocked = isActiveDayLockedForRole();
 
   cashDenominations.forEach((item, index) => {
     const row = document.createElement("label");
     row.className = "cash-row";
     row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.cashCounts[item.label] ?? 0}" />`;
     const input = row.querySelector("input");
-    input.disabled = isClosed || isPastLocked || (isUserRole() && !isTodayDate());
+    input.disabled = isLocked || (isUserRole() && !isTodayDate());
     input.addEventListener("focus", () => {
       input.dataset.previousValue = input.value;
     });
@@ -1600,8 +1618,7 @@ function renderCashRows() {
 }
 
 function renderTillInputs() {
-  const isClosed = selectedDateIsClosed();
-  const isPastLocked = isPastDateLocked();
+  const isLocked = isActiveDayLockedForRole();
   const tillInputOrder = [
     "grossSales",
     "onlineCancels",
@@ -1617,7 +1634,7 @@ function renderTillInputs() {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
     input.value = state.till[key] ?? 0;
-    input.disabled = isClosed || isUserRole() || isPastLocked;
+    input.disabled = isLocked || isUserRole();
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.onfocus = () => {
@@ -2499,7 +2516,7 @@ function renderOrderSheet() {
   });
 
   elements.orderRows.querySelectorAll("[data-dc-box]").forEach((input) => {
-    input.disabled = isUserRole();
+    input.disabled = false;
     input.addEventListener("change", (event) => {
       state.orderDc[event.target.dataset.dcBox] = event.target.checked;
       persistState();
@@ -2844,7 +2861,8 @@ elements.pinOverlay.addEventListener("click", (event) => {
   elements.pinEntry.focus();
 });
 elements.pinPadButtons.forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
     const key = button.dataset.pinKey;
     const action = button.dataset.pinAction;
 

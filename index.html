@@ -51,12 +51,14 @@
           <strong id="authUserLabel">Not signed in</strong>
           <input id="authEmail" type="email" placeholder="email" autocomplete="email" />
           <input id="authPassword" class="pin-setting-input" type="text" placeholder="password" autocomplete="off" data-lpignore="true" data-form-type="other" />
-          <div class="auth-actions">
+          <div id="authActions" class="auth-actions">
             <button id="authSignInButton" type="button">Sign in</button>
             <button id="authSignUpButton" class="ghost-dark-button" type="button">Create</button>
           </div>
-          <button id="cloudSyncButton" class="ghost-dark-button" type="button">Sync now</button>
-          <button id="authSignOutButton" class="ghost-dark-button" type="button" hidden>Sign out</button>
+          <div class="cloud-actions">
+            <button id="cloudSyncButton" class="ghost-dark-button" type="button">Sync now</button>
+            <button id="authSignOutButton" class="ghost-dark-button subtle-signout" type="button" hidden>Sign out</button>
+          </div>
         </section>
 
         <section class="pin-status-card">
