@@ -177,6 +177,12 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
+const defaultPinUsers = [
+  { name: "User", pin: "1111" },
+  { name: "User 5133", pin: "5133" },
+  { name: "User 3868", pin: "3868" },
+];
+
 const elements = {
   businessDate: document.querySelector("#businessDate"),
   previousMonthButton: document.querySelector("#previousMonthButton"),
@@ -287,7 +293,6 @@ let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
 let reconcileVisible = false;
-let currentSession = null;
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
@@ -343,7 +348,7 @@ function createDefaultState() {
     pinSettings: {
       admin: "1986",
       user: "1111",
-      users: [{ name: "User", pin: "1111" }],
+      users: cloneJson(defaultPinUsers),
     },
     uiSettings: {
       mobileEntryDock: "bottom",
@@ -377,9 +382,7 @@ function normalizeStoredState(parsed = {}) {
     pinSettings: {
       admin: parsed.pinSettings?.admin || "1986",
       user: parsed.pinSettings?.user || "1111",
-      users:
-        parsed.pinSettings?.users ||
-        [{ name: "User", pin: parsed.pinSettings?.user || "1111" }],
+      users: mergePinUsers(defaultPinUsers, parsed.pinSettings?.users || [], [{ name: "User", pin: parsed.pinSettings?.user || "1111" }]),
     },
     uiSettings: {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
@@ -422,23 +425,22 @@ function setSyncStatus(message) {
 }
 
 function renderAuthState() {
-  const email = currentSession?.user?.email;
-  elements.authUserLabel.textContent = email || "Not signed in";
-  elements.authEmail.hidden = Boolean(email);
-  elements.authPassword.hidden = Boolean(email);
-  elements.authActions.hidden = Boolean(email);
-  elements.authSignOutButton.hidden = !email;
-  elements.cloudSyncButton.disabled = !email;
-  elements.headerSyncButton.disabled = !email;
-  elements.mobileSyncButton.disabled = !email;
-  elements.authSignInButton.disabled = !supabaseClient || Boolean(email);
-  elements.authSignUpButton.disabled = !supabaseClient || Boolean(email);
+  const online = Boolean(supabaseClient);
+  elements.authUserLabel.textContent = online ? "Auto cloud sync" : "Supabase offline";
+  elements.authEmail.hidden = true;
+  elements.authPassword.hidden = true;
+  elements.authActions.hidden = true;
+  elements.authSignOutButton.hidden = true;
+  elements.cloudSyncButton.disabled = !online;
+  elements.headerSyncButton.disabled = !online;
+  elements.mobileSyncButton.disabled = !online;
+  elements.authSignInButton.disabled = true;
+  elements.authSignUpButton.disabled = true;
 
   if (!supabaseClient) {
     setSyncStatus("Local draft");
-    elements.authUserLabel.textContent = "Supabase offline";
-  } else if (!email) {
-    setSyncStatus("Local draft");
+  } else {
+    setSyncStatus("Auto sync ready");
   }
 }
 
@@ -458,6 +460,16 @@ function formatAuditBadge(name, timestamp) {
   if (!name) return "Locked";
   if (!timestamp) return name;
   return `${name} ${new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function mergePinUsers(...userLists) {
+  const byPin = new Map();
+  userLists.flat().forEach((user) => {
+    const pin = String(user?.pin || "").replace(/\D/g, "").padStart(4, "0").slice(-4);
+    if (!/^\d{4}$/.test(pin)) return;
+    byPin.set(pin, { name: user?.name || `User ${pin}`, pin });
+  });
+  return Array.from(byPin.values());
 }
 
 function isRoleAllowedView(view) {
@@ -577,9 +589,11 @@ function resetIdleTimer() {
 }
 
 function normalizeUsers() {
-  const users = state.pinSettings?.users?.length
-    ? state.pinSettings.users
-    : [{ name: "User", pin: state.pinSettings?.user || "1111" }];
+  const users = mergePinUsers(
+    defaultPinUsers,
+    state.pinSettings?.users || [],
+    [{ name: "User", pin: state.pinSettings?.user || "1111" }],
+  );
   state.pinSettings.users = users;
   return users;
 }
@@ -692,7 +706,7 @@ function focusAdjacentMobileGame(direction) {
 }
 
 function scheduleCloudSave() {
-  if (isApplyingCloudState || !supabaseClient || !currentSession) return;
+  if (isApplyingCloudState || !supabaseClient) return;
   window.clearTimeout(cloudSaveTimer);
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
@@ -701,14 +715,16 @@ function scheduleCloudSave() {
 }
 
 async function saveCloudState() {
-  if (!supabaseClient || !currentSession) return;
+  if (!supabaseClient) {
+    setSyncStatus("Supabase offline");
+    return;
+  }
 
   setSyncStatus("Syncing cloud");
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
     {
       store_key: CLOUD_STORE_KEY,
       state: getSerializableState(),
-      updated_by: currentSession.user.id,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "store_key" },
@@ -725,10 +741,6 @@ async function saveCloudState() {
 async function loadCloudState() {
   if (!supabaseClient) {
     setSyncStatus("Supabase offline");
-    return;
-  }
-  if (!currentSession) {
-    setSyncStatus("Team login required");
     return;
   }
 
@@ -762,54 +774,14 @@ async function loadCloudState() {
 }
 
 async function signInToCloud() {
-  if (!supabaseClient) return;
-  const email = elements.authEmail.value.trim();
-  const password = elements.authPassword.value;
-
-  if (!email || !password) {
-    setSyncStatus("Enter email/password");
-    return;
-  }
-
-  setSyncStatus("Signing in");
-  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-  if (error) {
-    setSyncStatus(`Login error: ${error.message}`);
-    return;
-  }
-
-  currentSession = data.session;
-  renderAuthState();
   await loadCloudState();
 }
 
 async function signUpForCloud() {
-  if (!supabaseClient) return;
-  const email = elements.authEmail.value.trim();
-  const password = elements.authPassword.value;
-
-  if (!email || !password) {
-    setSyncStatus("Enter email/password");
-    return;
-  }
-
-  setSyncStatus("Creating user");
-  const { data, error } = await supabaseClient.auth.signUp({ email, password });
-  if (error) {
-    setSyncStatus(`Signup error: ${error.message}`);
-    return;
-  }
-
-  currentSession = data.session;
-  renderAuthState();
-  setSyncStatus(data.session ? "Account created" : "Check email to confirm");
-  if (data.session) await saveCloudState();
+  await saveCloudState();
 }
 
 async function signOutOfCloud() {
-  if (!supabaseClient) return;
-  await supabaseClient.auth.signOut();
-  currentSession = null;
   if (!isTodayDate()) switchDate(todayIso());
   renderAuthState();
 }
@@ -817,24 +789,16 @@ async function signOutOfCloud() {
 async function initCloudSync() {
   renderAuthState();
   if (!supabaseClient) return;
-
-  const { data } = await supabaseClient.auth.getSession();
-  currentSession = data.session;
-  renderAuthState();
-
-  supabaseClient.auth.onAuthStateChange((_event, session) => {
-    currentSession = session;
-    renderAuthState();
-  });
-
-  if (currentSession) {
-    await loadCloudState();
-  }
+  await loadCloudState();
 }
 
 function normalizeNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatDecimalInput(value) {
+  return normalizeNumber(value).toFixed(2);
 }
 
 function cloneJson(value) {
@@ -1273,12 +1237,14 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
   elements.appConfirmOk.textContent = confirmText;
   elements.appConfirmCancel.textContent = cancelText;
   elements.appConfirmModal.hidden = false;
+  window.setTimeout(() => elements.appConfirmOk.focus(), 20);
 
   return new Promise((resolve) => {
     const cleanup = () => {
       elements.appConfirmModal.hidden = true;
       elements.appConfirmOk.removeEventListener("click", handleOk);
       elements.appConfirmCancel.removeEventListener("click", handleCancel);
+      elements.appConfirmModal.removeEventListener("keydown", handleKeydown);
     };
     const handleOk = () => {
       cleanup();
@@ -1288,9 +1254,20 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
       cleanup();
       resolve(false);
     };
+    const handleKeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleOk();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleCancel();
+      }
+    };
 
     elements.appConfirmOk.addEventListener("click", handleOk);
     elements.appConfirmCancel.addEventListener("click", handleCancel);
+    elements.appConfirmModal.addEventListener("keydown", handleKeydown);
   });
 }
 
@@ -1618,7 +1595,6 @@ function renderCashRows() {
 }
 
 function renderTillInputs() {
-  const isLocked = isActiveDayLockedForRole();
   const tillInputOrder = [
     "grossSales",
     "onlineCancels",
@@ -1633,44 +1609,36 @@ function renderTillInputs() {
   tillInputOrder.forEach((key, index) => {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
-    input.value = state.till[key] ?? 0;
-    input.disabled = isLocked || isUserRole();
+    input.value = formatDecimalInput(state.till[key]);
+    input.disabled = isUserRole();
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.onfocus = () => {
       input.dataset.previousValue = input.value;
     };
     input.oninput = (event) => {
-      if (!canEditActiveDay(event.target)) {
-        renderTillInputs();
-        renderTotals();
-        return;
-      }
       state.till[key] = normalizeNumber(event.target.value);
       state.till = normalizeTill(state.till);
       syncActiveDayDraft();
       persistIfLiveDate();
-      renderTillInputs();
+      renderCashlessTotalInput();
       renderTotals();
     };
-    input.onchange = async () => {
-      const previousValue = input.dataset.previousValue ?? "";
-      if (!isPreviousDateDraftMode()) return;
-      const ok = await confirmPreviousDateFieldChange(input, previousValue, () => {
-        state.till[key] = normalizeNumber(previousValue);
-        state.till = normalizeTill(state.till);
-        syncActiveDayDraft();
-        renderTillInputs();
-        renderTotals();
-      });
-      if (ok) input.dataset.previousValue = input.value;
+    input.onchange = () => {
+      input.value = formatDecimalInput(input.value);
+      input.dataset.previousValue = input.value;
     };
     input.onkeydown = handleGroupedEnterKeydown;
   });
 
   const cashlessTotal = document.querySelector("#cashlessOnlineSales");
-  cashlessTotal.value = normalizeTill(state.till).cashlessOnlineSales;
+  cashlessTotal.value = formatDecimalInput(normalizeTill(state.till).cashlessOnlineSales);
   cashlessTotal.disabled = true;
+}
+
+function renderCashlessTotalInput() {
+  const cashlessTotal = document.querySelector("#cashlessOnlineSales");
+  if (cashlessTotal) cashlessTotal.value = formatDecimalInput(normalizeTill(state.till).cashlessOnlineSales);
 }
 
 function renderTotals() {
