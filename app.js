@@ -1850,8 +1850,16 @@ function renderParsedSalesSummaryRows(parsed) {
       : "";
   const rows = salesSummaryFields
     .map(([key, label]) => {
-      const value = key === "reportDate" ? parsed[key] || "Not found" : formatDecimalInput(parsed[key]);
-      return `<div class="scan-review-row parsed"><span>${label}</span><strong>${value}</strong></div>`;
+      const value = key === "reportDate" ? parsed[key] || "" : formatDecimalInput(parsed[key]);
+      const inputType = key === "reportDate" ? "text" : "number";
+      const inputMode = key === "reportDate" ? "text" : "decimal";
+      const step = key === "reportDate" ? "" : ` step="0.01"`;
+      return `
+        <label class="scan-review-row parsed editable">
+          <span>${label}</span>
+          <input data-scan-field="${key}" type="${inputType}" inputmode="${inputMode}"${step} value="${value}" placeholder="${key === "reportDate" ? "YYYY-MM-DD" : "0.00"}" />
+        </label>
+      `;
     })
     .join("");
   const warnings = (parsed.warnings || [])
@@ -1891,6 +1899,20 @@ function renderScanReview() {
     )
     .join("");
   elements.scanReviewRows.innerHTML = [files.length ? activeRows : "", savedRows].filter(Boolean).join("");
+  elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      const key = event.target.dataset.scanField;
+      if (!scanDraft.parsed || !key) return;
+      scanDraft.parsed[key] = key === "reportDate" ? event.target.value : normalizeNumber(event.target.value);
+      if (key === "reportDate") scanDraft.parsed.reportDate = normalizeParsedReportDate(event.target.value) || event.target.value;
+    });
+    input.addEventListener("change", (event) => {
+      const key = event.target.dataset.scanField;
+      if (!key || key === "reportDate") return;
+      event.target.value = formatDecimalInput(event.target.value);
+      scanDraft.parsed[key] = normalizeNumber(event.target.value);
+    });
+  });
 
   const activePhotos = files
     .map(
@@ -1908,15 +1930,16 @@ function renderScanReview() {
   const savedPhotos = savedRecords
     .slice()
     .reverse()
-    .map((record, index) =>
-      record.photo?.dataUrl
+    .map((record, index) => {
+      const photoSource = record.photo?.url || record.photo?.dataUrl || "";
+      return photoSource
         ? `
           <figure>
-            <a href="${record.photo.dataUrl}" target="_blank" rel="noopener">
-              <img src="${record.photo.dataUrl}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
+            <a href="${photoSource}" target="_blank" rel="noopener">
+              <img src="${photoSource}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
             </a>
             <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
-            <a class="scan-photo-link" href="${record.photo.dataUrl}" download="${record.photo.name || "sales-summary.jpg"}">Download</a>
+            <a class="scan-photo-link" href="${photoSource}" download="${record.photo?.name || "sales-summary.jpg"}">Download</a>
           </figure>
         `
         : `
@@ -1924,8 +1947,8 @@ function renderScanReview() {
             <div>Photo unavailable</div>
             <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
           </figure>
-        `,
-    )
+        `;
+    })
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
@@ -1967,6 +1990,32 @@ async function parseSalesSummaryScan() {
   renderScanReview();
 }
 
+async function uploadScanPhoto(file, targetDate) {
+  if (!supabaseClient || !file?.blob) return null;
+  const safeName = String(file.name || "sales-summary.jpg").replace(/[^a-z0-9._-]/gi, "-").toLowerCase();
+  const path = `${targetDate}/${Date.now()}-${safeName}`;
+  const { error } = await supabaseClient.storage.from("lottery-scans").upload(path, file.blob, {
+    contentType: "image/jpeg",
+    upsert: true,
+  });
+  if (error) {
+    console.warn("Scan photo storage upload failed", error);
+    return null;
+  }
+  const { data } = supabaseClient.storage.from("lottery-scans").getPublicUrl(path);
+  return data?.publicUrl || null;
+}
+
+function currentParsedSalesSummaryFromReview() {
+  const parsed = { ...(scanDraft.parsed || {}) };
+  elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
+    const key = input.dataset.scanField;
+    if (!key) return;
+    parsed[key] = key === "reportDate" ? input.value : normalizeNumber(input.value);
+  });
+  return normalizeParsedSalesSummary(parsed);
+}
+
 async function handleScanFiles(type, fileList) {
   const files = Array.from(fileList || []).filter((file) => file.type.startsWith("image/"));
   if (!files.length) return;
@@ -2000,7 +2049,7 @@ function clearScanReview() {
 async function applySalesSummaryScan() {
   if (scanDraft.type !== "sales-summary" || !scanDraft.parsed) return;
 
-  const parsed = normalizeParsedSalesSummary(scanDraft.parsed);
+  const parsed = currentParsedSalesSummaryFromReview();
   const targetDate = parsed.reportDate || state.businessDate;
   const ok = await showAppConfirm({
     eyebrow: "Submit scan",
@@ -2015,7 +2064,7 @@ async function applySalesSummaryScan() {
     switchDate(targetDate);
   }
 
-  state.till = normalizeTill({
+  const appliedTill = normalizeTill({
     ...state.till,
     grossSales: parsed.grossSales,
     onlineCancels: parsed.onlineCancels,
@@ -2025,9 +2074,18 @@ async function applySalesSummaryScan() {
     cashlessInstantSales: parsed.cashlessInstantSales,
     adjustments: parsed.adjustments,
   });
-  syncActiveDayDraft();
+  state.till = appliedTill;
+
+  const dayLog = previousDateDraft?.date === state.businessDate ? previousDateDraft.dayLog : getDayLog();
+  dayLog.till = { ...appliedTill };
+  dayLog.cashCounts = { ...state.cashCounts };
+  dayLog.totals = buildTotals();
+  dayLog.savedAt = new Date().toISOString();
+  state.dailyLogs[state.businessDate] = cloneJson(dayLog);
+  previousDateDraft = null;
 
   state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
+  const photoUrl = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
   state.scanRecords[state.businessDate].push({
     type: scanDraft.type,
     savedAt: new Date().toISOString(),
@@ -2038,17 +2096,10 @@ async function applySalesSummaryScan() {
     photo: {
       name: scanDraft.files[0]?.name || "sales-summary.jpg",
       size: scanDraft.files[0]?.size || 0,
-      dataUrl: scanDraft.files[0]?.dataUrl || "",
+      url: photoUrl || "",
+      dataUrl: photoUrl ? "" : scanDraft.files[0]?.dataUrl || "",
     },
   });
-  getDayLog().savedAt = new Date().toISOString();
-  if (isPreviousDateDraftMode()) {
-    const draftLog = cloneJson(previousDateDraft.dayLog);
-    draftLog.totals = buildTotals();
-    draftLog.savedAt = draftLog.savedAt || new Date().toISOString();
-    state.dailyLogs[state.businessDate] = draftLog;
-    previousDateDraft = null;
-  }
 
   persistState();
   await saveCloudState();
