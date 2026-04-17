@@ -1262,6 +1262,14 @@ function ensurePreviousDateDraft() {
 }
 
 function canEditActiveDay(targetInput) {
+  if (selectedDateIsClosed()) {
+    if (targetInput) {
+      targetInput.value = targetInput.dataset.focusValue ?? targetInput.defaultValue ?? "";
+    }
+    elements.syncStatus.textContent = "Closed day locked";
+    return false;
+  }
+
   const dayLog = state.dailyLogs[state.businessDate];
   const isToday = isTodayDate();
   const isProtectedDate = Boolean(dayLog?.savedAt && !isToday) || isCompletedDay();
@@ -1618,7 +1626,7 @@ function renderCashRows() {
     row.className = "cash-row";
     row.innerHTML = `<span>${item.label}</span><input data-enter-group="cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.cashCounts[item.label] ?? 0}" />`;
     const input = row.querySelector("input");
-    input.disabled = isLocked || (isUserRole() && !isTodayDate());
+    input.disabled = selectedDateIsClosed() || isLocked || (isUserRole() && !isTodayDate());
     input.addEventListener("focus", () => {
       input.dataset.previousValue = input.value;
     });
@@ -1665,7 +1673,7 @@ function renderTillInputs() {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
     input.value = formatDecimalInput(state.till[key]);
-    input.disabled = isUserRole();
+    input.disabled = selectedDateIsClosed() || isUserRole();
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
     input.onfocus = () => {
@@ -1792,8 +1800,9 @@ function buildParserChecklist(type) {
 }
 
 function normalizeParsedSalesSummary(parsed = {}) {
+  const normalizedDate = normalizeParsedReportDate(parsed.reportDate);
   return {
-    reportDate: parsed.reportDate || "",
+    reportDate: normalizedDate,
     grossSales: normalizeNumber(parsed.grossSales),
     onlineCancels: normalizeNumber(parsed.onlineCancels),
     onlineCashes: normalizeNumber(parsed.onlineCashes),
@@ -1804,6 +1813,34 @@ function normalizeParsedSalesSummary(parsed = {}) {
     confidence: parsed.confidence || "unknown",
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
   };
+}
+
+function normalizeParsedReportDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(2, "0")}`;
+  }
+
+  const slashMatch = raw.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+  if (slashMatch) {
+    const selected = new Date(`${state.businessDate}T12:00:00`);
+    const yearPart = slashMatch[3] || String(selected.getFullYear());
+    const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
+    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  return "";
 }
 
 function renderParsedSalesSummaryRows(parsed) {
@@ -1826,6 +1863,9 @@ function renderParsedSalesSummaryRows(parsed) {
 function renderScanReview() {
   const files = scanDraft.files || [];
   const savedRecords = state.scanRecords?.[state.businessDate] || [];
+  const isClosed = selectedDateIsClosed();
+  elements.scanSalesSummaryButton.disabled = isClosed;
+  elements.scanManualInstantButton.disabled = isClosed;
   elements.scanReviewPanel.hidden = !files.length && !savedRecords.length;
   elements.scanReviewTitle.textContent = files.length
     ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
@@ -1856,8 +1896,11 @@ function renderScanReview() {
     .map(
       (file, index) => `
         <figure>
-          <img src="${file.url}" alt="${scanTypeLabel(scanDraft.type)} scan ${index + 1}" />
+          <a href="${file.url}" target="_blank" rel="noopener">
+            <img src="${file.url}" alt="${scanTypeLabel(scanDraft.type)} scan ${index + 1}" />
+          </a>
           <figcaption>${formatBytes(file.originalSize)} -> ${formatBytes(file.size)}</figcaption>
+          <a class="scan-photo-link" href="${file.url}" download="${file.name}">Download</a>
         </figure>
       `,
     )
@@ -1869,8 +1912,11 @@ function renderScanReview() {
       record.photo?.dataUrl
         ? `
           <figure>
-            <img src="${record.photo.dataUrl}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
+            <a href="${record.photo.dataUrl}" target="_blank" rel="noopener">
+              <img src="${record.photo.dataUrl}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
+            </a>
             <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
+            <a class="scan-photo-link" href="${record.photo.dataUrl}" download="${record.photo.name || "sales-summary.jpg"}">Download</a>
           </figure>
         `
         : `
@@ -1883,10 +1929,12 @@ function renderScanReview() {
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
-  elements.applyScanButton.disabled = !scanDraft.parsed;
+  elements.applyScanButton.disabled = isClosed || !scanDraft.parsed;
   elements.scanParserStatus.textContent = scanDraft.parsed
     ? "Parsed values ready. Review before submitting."
-    : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
+    : isClosed
+      ? "Closed day locked. Scanning is disabled for Sundays."
+      : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
 }
 
 async function parseSalesSummaryScan() {
@@ -1994,6 +2042,13 @@ async function applySalesSummaryScan() {
     },
   });
   getDayLog().savedAt = new Date().toISOString();
+  if (isPreviousDateDraftMode()) {
+    const draftLog = cloneJson(previousDateDraft.dayLog);
+    draftLog.totals = buildTotals();
+    draftLog.savedAt = draftLog.savedAt || new Date().toISOString();
+    state.dailyLogs[state.businessDate] = draftLog;
+    previousDateDraft = null;
+  }
 
   persistState();
   await saveCloudState();
@@ -2515,6 +2570,11 @@ function clearActiveTab() {
   const message = `Clear ${labelMap[activeView] || "this tab"}? This cannot be undone.`;
   if (!window.confirm(message)) return;
 
+  if (activeView === "order") {
+    elements.syncStatus.textContent = "Order sheet is excluded from Clear this tab.";
+    return;
+  }
+
   if (activeView === "daily") {
     const dayLog = getDayLog();
     dayLog.entries = {};
@@ -2529,10 +2589,24 @@ function clearActiveTab() {
     selectedMonthDates().forEach((date) => {
       delete state.dailyLogs[date];
     });
-  } else if (activeView === "order") {
-    state.orderInventory = emptyOrderInventory();
-    state.orderAudit = {};
-    state.extraOrders = cloneExtraOrders();
+  }
+
+  if (activeView === "daily" || activeView === "till") {
+    const dayLog = state.dailyLogs[state.businessDate];
+    if (dayLog) {
+      const hasEntries = Object.values(dayLog.entries || {}).some((entry) => entry.todayEnding !== "" || entry.manualInstantSold !== "");
+      const hasTill = Object.values(normalizeTill(dayLog.till || {})).some((value) => normalizeNumber(value));
+      const hasCash = Object.values(dayLog.cashCounts || {}).some((value) => normalizeNumber(value));
+      if (!hasEntries && !hasTill && !hasCash) {
+        delete state.dailyLogs[state.businessDate];
+        delete state.scanRecords[state.businessDate];
+      } else {
+        dayLog.totals = buildTotals();
+        dayLog.savedAt = null;
+        dayLog.completedAt = null;
+        dayLog.completedBy = "";
+      }
+    }
   }
 
   persistState();
