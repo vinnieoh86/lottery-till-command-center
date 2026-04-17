@@ -153,6 +153,7 @@ const defaultTill = {
   cashlessOnlineOnlySales: 0,
   cashlessInstantSales: 0,
   officePayout: 0,
+  misprintWithoutCancel: 0,
   adjustments: 0,
 };
 
@@ -186,6 +187,8 @@ const salesSummaryFields = [
   ["cashlessOnlineOnlySales", "Cashless online sale"],
   ["instantCashes", "Instant cashes"],
   ["cashlessInstantSales", "Cashless instant sales"],
+  ["officePayout", "Office payout"],
+  ["misprintWithoutCancel", "Misprint w/out cancel"],
   ["adjustments", "Adjustments"],
 ];
 
@@ -782,7 +785,7 @@ async function saveCloudState() {
     return;
   }
 
-  setSyncStatus("Cloud synced");
+  setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
 }
 
 async function loadCloudState() {
@@ -810,15 +813,7 @@ async function loadCloudState() {
 
   isApplyingCloudState = true;
   const activeDate = state.businessDate || todayIso();
-  const cloudState = normalizeStoredState(data.state);
-  const localLog = state.dailyLogs?.[activeDate];
-  const cloudLog = cloudState.dailyLogs?.[activeDate];
-  const preserveActiveDate =
-    localLog?.savedAt && (!cloudLog?.savedAt || new Date(localLog.savedAt) > new Date(cloudLog.savedAt));
-  state = normalizeStoredState({ ...cloudState, businessDate: activeDate });
-  if (preserveActiveDate) {
-    state.dailyLogs[activeDate] = localLog;
-  }
+  state = normalizeStoredState({ ...data.state, businessDate: activeDate });
   inventory = state.inventory || inventory;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   hydrateActiveDay();
@@ -1052,6 +1047,7 @@ function calculateLotterySalesForTill(till, date = state.businessDate) {
     normalizeNumber(till.onlineCashes) -
     normalizeNumber(till.instantCashes) -
     normalizeNumber(till.cashlessOnlineSales) -
+    normalizeNumber(till.misprintWithoutCancel) -
     normalizeNumber(till.adjustments) +
     normalizeNumber(till.officePayout) +
     calculateInstantSales(date)
@@ -1187,6 +1183,7 @@ function getSavedDayTotals(date) {
     cashlessOnlineSales: normalizeNumber(till.cashlessOnlineSales),
     cashlessInstantSales: normalizeNumber(till.cashlessInstantSales),
     officePayout: normalizeNumber(till.officePayout),
+    misprintWithoutCancel: normalizeNumber(till.misprintWithoutCancel),
   };
 }
 
@@ -1299,6 +1296,7 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
   elements.appConfirmBody.textContent = body;
   elements.appConfirmOk.textContent = confirmText;
   elements.appConfirmCancel.textContent = cancelText;
+  elements.appConfirmCancel.hidden = !cancelText;
   elements.appConfirmModal.hidden = false;
   window.setTimeout(() => elements.appConfirmOk.focus(), 20);
 
@@ -1308,6 +1306,7 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
       elements.appConfirmOk.removeEventListener("click", handleOk);
       elements.appConfirmCancel.removeEventListener("click", handleCancel);
       elements.appConfirmModal.removeEventListener("keydown", handleKeydown);
+      elements.appConfirmCancel.hidden = false;
     };
     const handleOk = () => {
       cleanup();
@@ -1332,6 +1331,10 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
     elements.appConfirmCancel.addEventListener("click", handleCancel);
     elements.appConfirmModal.addEventListener("keydown", handleKeydown);
   });
+}
+
+function showAppNotice({ eyebrow = "Notice", title, body, confirmText = "OK" }) {
+  return showAppConfirm({ eyebrow, title, body, confirmText, cancelText: "" });
 }
 
 function savePreviousDateDraftChange() {
@@ -1377,6 +1380,10 @@ function markActiveDaySaved(statusText = "Autosaved") {
   elements.syncStatus.textContent = statusText;
 }
 
+function pendingScanRecordsForDate(date) {
+  return (state.scanRecords?.[date] || []).filter((record) => record.status === "pending-review");
+}
+
 function renderCalendar() {
   const selectedDate = new Date(`${state.businessDate}T12:00:00`);
   const year = selectedDate.getFullYear();
@@ -1413,12 +1420,17 @@ function renderCalendar() {
     if (isoDate === state.businessDate) card.classList.add("active");
     if (dayLog?.savedAt) card.classList.add("saved");
     if (dayLog?.completedAt) card.classList.add("completed");
+    if (isAdminRole() && pendingScanRecordsForDate(isoDate).length) card.classList.add("needs-review");
     const status = dayLog?.completedAt ? "<small>Done</small>" : dayLog?.savedAt ? "<small>Draft</small>" : "";
+    const reviewBadge =
+      isAdminRole() && pendingScanRecordsForDate(isoDate).length
+        ? `<b class="review-alert">Review ${pendingScanRecordsForDate(isoDate).length}</b>`
+        : "";
     const varianceBadge =
       isAdminRole() && dayLog?.savedAt
         ? `<em class="day-variance ${getSavedDayTotals(isoDate).variance < 0 ? "negative" : "positive"}">${getSavedDayTotals(isoDate).variance >= 0 ? "+" : ""}${currency.format(getSavedDayTotals(isoDate).variance)}</em>`
         : "";
-    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}${varianceBadge}`;
+    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}${reviewBadge}${varianceBadge}`;
     card.addEventListener("click", () => switchDate(isoDate));
     elements.calendarDays.appendChild(card);
   }
@@ -1666,6 +1678,7 @@ function renderTillInputs() {
     "instantCashes",
     "cashlessInstantSales",
     "officePayout",
+    "misprintWithoutCancel",
     "adjustments",
   ];
 
@@ -1787,7 +1800,7 @@ function buildParserChecklist(type) {
   if (type === "sales-summary") {
     return [
       "Parse date below SALES SUMMARY - DAY, not the printed header date.",
-      "Auto-fill gross, cancels, online cashes, cashless online, instant cashes, cashless instant, and adjustments.",
+      "Auto-fill gross, cancels, online cashes, cashless online, instant cashes, cashless instant, office payout, misprints, and adjustments.",
       "Show +/- difference after review before final submit.",
     ];
   }
@@ -1809,6 +1822,8 @@ function normalizeParsedSalesSummary(parsed = {}) {
     cashlessOnlineOnlySales: normalizeNumber(parsed.cashlessOnlineOnlySales),
     instantCashes: normalizeNumber(parsed.instantCashes),
     cashlessInstantSales: normalizeNumber(parsed.cashlessInstantSales),
+    officePayout: normalizeNumber(parsed.officePayout),
+    misprintWithoutCancel: normalizeNumber(parsed.misprintWithoutCancel),
     adjustments: normalizeNumber(parsed.adjustments),
     confidence: parsed.confidence || "unknown",
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
@@ -1874,7 +1889,8 @@ function renderScanReview() {
   const isClosed = selectedDateIsClosed();
   elements.scanSalesSummaryButton.disabled = isClosed;
   elements.scanManualInstantButton.disabled = isClosed;
-  elements.scanReviewPanel.hidden = !files.length && !savedRecords.length;
+  const userUploadOnly = isUserRole();
+  elements.scanReviewPanel.hidden = userUploadOnly ? !files.length : !files.length && !savedRecords.length;
   elements.scanReviewTitle.textContent = files.length
     ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
     : savedRecords.length
@@ -1893,12 +1909,19 @@ function renderScanReview() {
       (record) => `
         <div class="scan-review-row parsed">
           <span>${scanTypeLabel(record.type)} saved ${new Date(record.savedAt).toLocaleString()}</span>
-          <strong>${record.parsedReportDate || state.businessDate}</strong>
+          <strong>${record.parsedReportDate || state.businessDate}${record.status === "pending-review" ? " - NEEDS REVIEW" : ""}</strong>
+          ${
+            isAdminRole() && record.status === "pending-review"
+              ? `<button class="ghost-button review-scan-button" type="button" data-review-scan-index="${savedRecords.indexOf(record)}">Review scan</button>`
+              : ""
+          }
         </div>
       `,
     )
     .join("");
-  elements.scanReviewRows.innerHTML = [files.length ? activeRows : "", savedRows].filter(Boolean).join("");
+  elements.scanReviewRows.innerHTML = [!userUploadOnly && scanDraft.parsed ? activeRows : files.length ? activeRows : "", !userUploadOnly ? savedRows : ""]
+    .filter(Boolean)
+    .join("");
   elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
     input.addEventListener("input", (event) => {
       const key = event.target.dataset.scanField;
@@ -1945,16 +1968,23 @@ function renderScanReview() {
         : `
           <figure class="scan-photo-missing">
             <div>Photo unavailable</div>
-            <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
+            <figcaption>${record.photo?.uploadError || `Saved ${new Date(record.savedAt).toLocaleString()}`}</figcaption>
           </figure>
         `;
     })
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
+  elements.scanReviewRows.querySelectorAll("[data-review-scan-index]").forEach((button) => {
+    button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
+  });
+
+  elements.applyScanButton.hidden = userUploadOnly;
   elements.applyScanButton.disabled = isClosed || !scanDraft.parsed;
   elements.scanParserStatus.textContent = scanDraft.parsed
-    ? "Parsed values ready. Review before submitting."
+    ? userUploadOnly
+      ? "Upload complete. Manager review required."
+      : "Parsed values ready. Review before submitting."
     : isClosed
       ? "Closed day locked. Scanning is disabled for Sundays."
       : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
@@ -1976,22 +2006,109 @@ async function parseSalesSummaryScan() {
   formData.append("image", firstFile.blob, firstFile.name);
   formData.append("businessDate", state.businessDate);
 
-  const { data, error } = await supabaseClient.functions.invoke("parse-sales-summary", {
-    body: formData,
-  });
-
-  if (error) {
+  let data;
+  try {
+    data = await invokeSalesSummaryParser(formData);
+  } catch (error) {
+    console.error("Sales Summary parser failed", error);
     elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse image"}`;
     return;
   }
 
   const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
   scanDraft.parsed = parsed;
+  if (isUserRole()) {
+    await savePendingSalesSummaryScan(parsed);
+    await showAppNotice({
+      eyebrow: "Upload complete",
+      title: "Complete",
+      body: "Sales Summary photo was uploaded and sent to admin review.",
+      confirmText: "OK",
+    });
+    clearScanReview();
+    renderCalendar();
+    return;
+  }
+
+  await showAppNotice({
+    eyebrow: "Manager review",
+    title: "Needs Review!",
+    body: "Parsed Sales Summary values are ready. Review and submit before they update Lottery Totals.",
+    confirmText: "Review now",
+  });
   renderScanReview();
 }
 
+async function savePendingSalesSummaryScan(parsed) {
+  const targetDate = parsed.reportDate || state.businessDate;
+  const photoUpload = await uploadScanPhoto(scanDraft.files[0], targetDate);
+  state.scanRecords[targetDate] = state.scanRecords[targetDate] || [];
+  state.scanRecords[targetDate].push({
+    type: scanDraft.type,
+    status: "pending-review",
+    savedAt: new Date().toISOString(),
+    savedBy: currentUserName(),
+    selectedBusinessDate: state.businessDate,
+    parsedReportDate: parsed.reportDate || "",
+    parsed,
+    photo: {
+      name: scanDraft.files[0]?.name || "sales-summary.jpg",
+      size: scanDraft.files[0]?.size || 0,
+      url: photoUpload.url || "",
+      uploadError: photoUpload.error || "",
+      dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
+    },
+  });
+  persistState();
+  await saveCloudState();
+  elements.scanParserStatus.textContent = photoUpload.error
+    ? `Upload saved for review, but photo upload failed: ${photoUpload.error}`
+    : `Upload saved for admin review on ${targetDate}.`;
+}
+
+function loadPendingScanForReview(index) {
+  const record = state.scanRecords?.[state.businessDate]?.[index];
+  if (!record || record.status !== "pending-review") return;
+  scanDraft = {
+    type: record.type || "sales-summary",
+    files: [],
+    parsed: normalizeParsedSalesSummary(record.parsed || {}),
+    reviewRecordDate: state.businessDate,
+    reviewRecordIndex: index,
+  };
+  renderScanReview();
+  elements.scanParserStatus.textContent = "Pending scan loaded. Review values, then submit.";
+}
+
+async function invokeSalesSummaryParser(formData) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-sales-summary`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: formData,
+  });
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const details = payload.details || payload.raw || payload.message || "";
+    const compactDetails = String(details).replace(/\s+/g, " ").trim().slice(0, 260);
+    const errorMessage = payload.error || `Edge function returned HTTP ${response.status}`;
+    throw new Error(compactDetails ? `${errorMessage}: ${compactDetails}` : errorMessage);
+  }
+
+  return payload;
+}
+
 async function uploadScanPhoto(file, targetDate) {
-  if (!supabaseClient || !file?.blob) return null;
+  if (!supabaseClient || !file?.blob) return { url: "", error: "Supabase is offline." };
   const safeName = String(file.name || "sales-summary.jpg").replace(/[^a-z0-9._-]/gi, "-").toLowerCase();
   const path = `${targetDate}/${Date.now()}-${safeName}`;
   const { error } = await supabaseClient.storage.from("lottery-scans").upload(path, file.blob, {
@@ -2000,10 +2117,10 @@ async function uploadScanPhoto(file, targetDate) {
   });
   if (error) {
     console.warn("Scan photo storage upload failed", error);
-    return null;
+    return { url: "", error: error.message || "Photo upload failed." };
   }
   const { data } = supabaseClient.storage.from("lottery-scans").getPublicUrl(path);
-  return data?.publicUrl || null;
+  return { url: data?.publicUrl || "", error: "" };
 }
 
 function currentParsedSalesSummaryFromReview() {
@@ -2072,6 +2189,8 @@ async function applySalesSummaryScan() {
     cashlessOnlineOnlySales: parsed.cashlessOnlineOnlySales,
     instantCashes: parsed.instantCashes,
     cashlessInstantSales: parsed.cashlessInstantSales,
+    officePayout: parsed.officePayout,
+    misprintWithoutCancel: parsed.misprintWithoutCancel,
     adjustments: parsed.adjustments,
   });
   state.till = appliedTill;
@@ -2085,31 +2204,50 @@ async function applySalesSummaryScan() {
   previousDateDraft = null;
 
   state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
-  const photoUrl = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
-  state.scanRecords[state.businessDate].push({
-    type: scanDraft.type,
-    savedAt: new Date().toISOString(),
-    savedBy: currentUserName(),
-    selectedBusinessDate: state.businessDate,
-    parsedReportDate: parsed.reportDate || "",
-    parsed,
-    photo: {
-      name: scanDraft.files[0]?.name || "sales-summary.jpg",
-      size: scanDraft.files[0]?.size || 0,
-      url: photoUrl || "",
-      dataUrl: photoUrl ? "" : scanDraft.files[0]?.dataUrl || "",
-    },
-  });
+  let photoUpload = { url: "", error: "" };
+  if (scanDraft.reviewRecordDate && scanDraft.reviewRecordIndex !== undefined) {
+    const record = state.scanRecords[state.businessDate]?.[scanDraft.reviewRecordIndex];
+    if (record) {
+      record.status = "reviewed";
+      record.reviewedAt = new Date().toISOString();
+      record.reviewedBy = currentUserName();
+      record.parsed = parsed;
+      record.parsedReportDate = parsed.reportDate || record.parsedReportDate || "";
+    }
+  } else {
+    photoUpload = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
+    state.scanRecords[state.businessDate].push({
+      type: scanDraft.type,
+      status: "reviewed",
+      savedAt: new Date().toISOString(),
+      savedBy: currentUserName(),
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: currentUserName(),
+      selectedBusinessDate: state.businessDate,
+      parsedReportDate: parsed.reportDate || "",
+      parsed,
+      photo: {
+        name: scanDraft.files[0]?.name || "sales-summary.jpg",
+        size: scanDraft.files[0]?.size || 0,
+        url: photoUpload.url || "",
+        uploadError: photoUpload.error || "",
+        dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
+      },
+    });
+  }
 
   persistState();
   await saveCloudState();
   (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
   scanDraft = { type: "", files: [], parsed: null };
   elements.salesSummaryScanInput.value = "";
+  renderCalendar();
   renderTillInputs();
   renderTotals();
   renderScanReview();
-  elements.scanParserStatus.textContent = `Sales Summary saved to ${state.businessDate}.`;
+  elements.scanParserStatus.textContent = photoUpload.error
+    ? `Sales Summary saved to ${state.businessDate}, but photo upload failed: ${photoUpload.error}`
+    : `Sales Summary saved to ${state.businessDate}.`;
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
@@ -2744,6 +2882,7 @@ function seedApril2026SheetData() {
     cashlessOnlineOnlySales: [772, 708, 587.5, 1015.5, 594.5, 705, 830.5, 575, 794, 720, 474, 570.5],
     cashlessInstantSales: Array(12).fill(0),
     officePayout: [0, 0, 0, 290, 0, 0, 0, 0, 0, 1577, 0, 0],
+    misprintWithoutCancel: Array(12).fill(0),
     adjustments: [50, 0, 65, 10, 0, 5, 0, 0, 0, 0, 0, 0],
   };
 

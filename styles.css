@@ -728,15 +728,17 @@ h2 {
 }
 
 .day-card.closed {
-  color: #f7f1df;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #d7d9d5;
   background:
-    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0 6px, transparent 6px 12px),
-    var(--coal);
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0 6px, transparent 6px 12px),
+    #303632;
+  opacity: 0.92;
 }
 
 .day-card.closed strong,
 .day-card.closed span {
-  color: #f7f1df;
+  color: #d7d9d5;
 }
 
 .day-card.active {
@@ -782,6 +784,25 @@ h2 {
   content: "Locked";
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.58rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.day-card.needs-review {
+  border-color: rgba(179, 58, 58, 0.74);
+  box-shadow: inset 0 0 0 2px rgba(179, 58, 58, 0.18);
+}
+
+.review-alert {
+  display: inline-flex;
+  justify-content: center;
+  margin-top: 0.24rem;
+  border-radius: 999px;
+  padding: 0.14rem 0.38rem;
+  color: #fff8e7;
+  background: var(--red);
+  font-family: var(--numeric-font);
+  font-size: 0.68rem;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -1264,11 +1285,38 @@ input[inputmode="numeric"],
   align-items: center;
 }
 
+.scan-review-row.editable {
+  cursor: text;
+}
+
+.scan-review-row.editable input {
+  width: 8.4rem;
+  border: 1px solid rgba(31, 122, 79, 0.24);
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.55rem;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.88);
+  font-family: var(--numeric-font);
+  font-size: 1rem;
+  font-weight: 900;
+  text-align: right;
+}
+
+.scan-review-row.editable input[data-scan-field="reportDate"] {
+  width: 9.4rem;
+  text-align: left;
+}
+
 .scan-review-row.parsed strong {
   margin-top: 0;
   font-family: var(--numeric-font);
   font-size: 1rem;
   font-variant-numeric: tabular-nums;
+}
+
+.review-scan-button {
+  margin-top: 0.45rem;
+  width: 100%;
 }
 
 .scan-warning {
@@ -1305,9 +1353,19 @@ input[inputmode="numeric"],
 
 .scan-photo-preview img {
   width: 100%;
-  max-height: 9rem;
+  max-height: 16rem;
   border-radius: 0.65rem;
-  object-fit: cover;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.scan-photo-link {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--green);
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-align: center;
 }
 
 .scan-photo-missing div {
