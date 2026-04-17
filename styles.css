@@ -10,6 +10,7 @@
   --amber: #ffb84d;
   --red: #b33a3a;
   --line: rgba(23, 33, 27, 0.14);
+  --numeric-font: "Cascadia Mono", "Consolas", "Lucida Console", monospace;
   --shadow: 0 24px 70px rgba(31, 38, 34, 0.17);
 }
 
@@ -225,6 +226,22 @@ select:focus {
 .cloud-actions {
   display: grid;
   gap: 0.55rem;
+}
+
+#cloudSyncButton {
+  border: 2px solid #083344;
+  color: #041014;
+  background: linear-gradient(135deg, #67e8f9, #22d3ee);
+  box-shadow: none;
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+#cloudSyncButton:hover,
+.header-sync-button:hover,
+.mobile-sync-strip button:hover {
+  background: linear-gradient(135deg, #a5f3fc, #67e8f9);
 }
 
 .subtle-signout {
@@ -575,10 +592,15 @@ h2 {
 }
 
 .header-sync-button {
-  border-color: rgba(190, 56, 56, 0.38);
-  color: #fff8e7;
-  background: linear-gradient(135deg, #be3838, #8a1f1f);
-  box-shadow: 0 0.65rem 1.2rem rgba(138, 31, 31, 0.18);
+  border: 2px solid #083344;
+  color: #041014;
+  background: linear-gradient(135deg, #67e8f9, #22d3ee);
+  box-shadow: none;
+  padding: 0.62rem 0.78rem !important;
+  font-size: 0.88rem !important;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .header-sync-button:disabled {
@@ -694,9 +716,9 @@ h2 {
 .day-card strong {
   display: block;
   color: #0d1510;
-  font-family: "IBM Plex Mono", monospace;
+  font-family: var(--numeric-font);
   font-size: 1rem;
-  font-weight: 700;
+  font-weight: 900;
 }
 
 .day-card span {
@@ -853,8 +875,21 @@ th {
 }
 
 td[data-output] {
-  font-family: "IBM Plex Mono", monospace;
-  font-weight: 600;
+  color: #17211b;
+  font-family: var(--numeric-font);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-static="bookNumber"],
+[data-static="value"],
+.cash-row input,
+.form-grid input[type="number"],
+.order-qty-input,
+.keepup-table input,
+.month-matrix-table td,
+.summary-table td {
+  font-variant-numeric: tabular-nums;
 }
 
 .pill-value,
@@ -863,13 +898,15 @@ td[data-output] {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  padding: 0.18rem 0.42rem;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.62rem;
-  font-weight: 600;
+  padding: 0.2rem 0.48rem;
+  font-family: var(--numeric-font);
+  font-size: 0.72rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
 }
 
 .pill-value {
+  min-width: 2.15rem;
   color: var(--coal);
   background: rgba(201, 242, 74, 0.44);
 }
@@ -926,6 +963,9 @@ td[data-output] {
   width: 4.65rem;
   min-width: 4.65rem;
   padding-inline: 0.4rem;
+  color: #17211b;
+  font-family: var(--numeric-font);
+  font-weight: 900;
   text-align: center;
 }
 
@@ -2003,10 +2043,14 @@ pre {
 
   .mobile-sync-strip button {
     border-radius: 0.65rem;
-    padding: 0.42rem 0.58rem;
-    color: #fff8e7;
-    background: linear-gradient(135deg, #be3838, #8a1f1f);
-    font-size: 0.72rem;
+    border: 2px solid #083344;
+    padding: 0.55rem 0.72rem;
+    color: #041014;
+    background: linear-gradient(135deg, #67e8f9, #22d3ee);
+    box-shadow: none;
+    font-size: 0.8rem;
+    font-weight: 900;
+    text-transform: uppercase;
   }
 
   .mobile-sync-strip button:disabled {
@@ -2092,8 +2136,8 @@ pre {
   #daily-entry td:nth-child(1) {
     grid-column: 1;
     grid-row: 1;
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 0.92rem;
+    font-family: var(--numeric-font);
+    font-size: 0.98rem;
     font-weight: 900;
   }
 
@@ -2101,7 +2145,7 @@ pre {
     grid-column: 2;
     grid-row: 1;
     color: var(--muted);
-    font-family: "IBM Plex Mono", monospace;
+    font-family: var(--numeric-font);
     font-size: 0.74rem;
     font-weight: 800;
   }
@@ -2167,8 +2211,12 @@ pre {
 
   #daily-entry .pill-value,
   #daily-entry .locked-chip {
-    padding: 0.12rem 0.34rem;
-    font-size: 0.58rem;
+    padding: 0.16rem 0.42rem;
+    font-size: 0.66rem;
+  }
+
+  #daily-entry .pill-value {
+    min-width: 2.05rem;
   }
 
   .today-ending-input {
@@ -2176,7 +2224,8 @@ pre {
     min-width: 0;
     height: 2.75rem;
     border: 2px solid rgba(31, 122, 79, 0.32);
-    font-size: 1.18rem;
+    font-family: var(--numeric-font);
+    font-size: 1.24rem;
     font-weight: 900;
   }
 

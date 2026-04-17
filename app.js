@@ -626,18 +626,21 @@ function renderUserList() {
         <div class="user-list-row">
           <span>${user.name || `User ${index + 1}`}</span>
           <strong>${String(user.pin || "").padStart(4, "0").slice(-4)}</strong>
-          <button class="ghost-button" type="button" data-remove-user-index="${index}">Remove</button>
+          <button class="ghost-button" type="button" data-remove-user-pin="${String(user.pin || "").padStart(4, "0").slice(-4)}">Remove</button>
         </div>
       `,
     )
     .join("");
 
-  elements.userList.querySelectorAll("[data-remove-user-index]").forEach((button) => {
+  elements.userList.querySelectorAll("[data-remove-user-pin]").forEach((button) => {
     button.addEventListener("click", () => {
-      const index = Number(button.dataset.removeUserIndex);
-      state.pinSettings.users.splice(index, 1);
+      const pin = button.dataset.removeUserPin;
+      const removedUser = normalizeUsers().find((user) => user.pin === pin);
+      state.pinSettings.users = normalizeUsers().filter((user) => user.pin !== pin);
+      state.pinSettings.user = "";
       persistState();
       renderUserList();
+      elements.syncStatus.textContent = `${removedUser?.name || "User"} removed`;
     });
   });
 }
@@ -2506,8 +2509,27 @@ function renderOrderSheet() {
 
   elements.orderRows.querySelectorAll("[data-dc-box]").forEach((input) => {
     input.disabled = false;
-    input.addEventListener("change", (event) => {
-      state.orderDc[event.target.dataset.dcBox] = event.target.checked;
+    input.addEventListener("change", async (event) => {
+      const id = event.target.dataset.dcBox;
+      const nextChecked = event.target.checked;
+      const previousChecked = Boolean(state.orderDc[id]);
+      const game = inventory.find((item) => gameId(item) === id);
+
+      event.target.checked = previousChecked;
+      const ok = await showAppConfirm({
+        eyebrow: "DC safety check",
+        title: nextChecked ? "Mark this game DC?" : "Remove DC from this game?",
+        body: `${game?.box || id} ${game?.bookNumber || ""} ${game?.name || ""}. Confirm this DC status change before it updates every list.`,
+        confirmText: nextChecked ? "Mark DC" : "Remove DC",
+        cancelText: "Cancel",
+      });
+
+      if (!ok) {
+        event.target.checked = previousChecked;
+        return;
+      }
+
+      state.orderDc[id] = nextChecked;
       persistState();
       renderOrderSheet();
       renderGames();
