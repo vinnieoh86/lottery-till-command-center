@@ -810,7 +810,15 @@ async function loadCloudState() {
 
   isApplyingCloudState = true;
   const activeDate = state.businessDate || todayIso();
-  state = normalizeStoredState({ ...data.state, businessDate: activeDate });
+  const cloudState = normalizeStoredState(data.state);
+  const localLog = state.dailyLogs?.[activeDate];
+  const cloudLog = cloudState.dailyLogs?.[activeDate];
+  const preserveActiveDate =
+    localLog?.savedAt && (!cloudLog?.savedAt || new Date(localLog.savedAt) > new Date(cloudLog.savedAt));
+  state = normalizeStoredState({ ...cloudState, businessDate: activeDate });
+  if (preserveActiveDate) {
+    state.dailyLogs[activeDate] = localLog;
+  }
   inventory = state.inventory || inventory;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   hydrateActiveDay();
@@ -1817,18 +1825,34 @@ function renderParsedSalesSummaryRows(parsed) {
 
 function renderScanReview() {
   const files = scanDraft.files || [];
-  elements.scanReviewPanel.hidden = !files.length;
+  const savedRecords = state.scanRecords?.[state.businessDate] || [];
+  elements.scanReviewPanel.hidden = !files.length && !savedRecords.length;
   elements.scanReviewTitle.textContent = files.length
     ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
-    : "No scan loaded";
+    : savedRecords.length
+      ? `${savedRecords.length} saved scan${savedRecords.length === 1 ? "" : "s"} for ${state.businessDate}`
+      : "No scan loaded";
 
-  elements.scanReviewRows.innerHTML = scanDraft.parsed
+  const activeRows = scanDraft.parsed
     ? renderParsedSalesSummaryRows(scanDraft.parsed)
     : buildParserChecklist(scanDraft.type)
         .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
         .join("");
+  const savedRows = savedRecords
+    .slice()
+    .reverse()
+    .map(
+      (record) => `
+        <div class="scan-review-row parsed">
+          <span>${scanTypeLabel(record.type)} saved ${new Date(record.savedAt).toLocaleString()}</span>
+          <strong>${record.parsedReportDate || state.businessDate}</strong>
+        </div>
+      `,
+    )
+    .join("");
+  elements.scanReviewRows.innerHTML = [files.length ? activeRows : "", savedRows].filter(Boolean).join("");
 
-  elements.scanPhotoPreview.innerHTML = files
+  const activePhotos = files
     .map(
       (file, index) => `
         <figure>
@@ -1838,6 +1862,21 @@ function renderScanReview() {
       `,
     )
     .join("");
+  const savedPhotos = savedRecords
+    .slice()
+    .reverse()
+    .map((record, index) =>
+      record.photo?.dataUrl
+        ? `
+          <figure>
+            <img src="${record.photo.dataUrl}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
+            <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
+          </figure>
+        `
+        : "",
+    )
+    .join("");
+  elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
   elements.applyScanButton.disabled = !scanDraft.parsed;
   elements.scanParserStatus.textContent = scanDraft.parsed
@@ -1949,10 +1988,13 @@ async function applySalesSummaryScan() {
       dataUrl: scanDraft.files[0]?.dataUrl || "",
     },
   });
+  getDayLog().savedAt = new Date().toISOString();
 
   persistState();
+  await saveCloudState();
   renderTillInputs();
   renderTotals();
+  renderScanReview();
   elements.scanParserStatus.textContent = `Sales Summary saved to ${state.businessDate}.`;
 }
 
