@@ -1,4 +1,5 @@
 const STORAGE_KEY = "lotteryTillState:v2";
+const SESSION_KEY = "lotteryTillSession:v1";
 const CLOUD_STORE_KEY = "lottery-till-main";
 const IDLE_LOCK_MS = 180000;
 const SUPABASE_URL = "https://psngcbeffraghwwuihsk.supabase.co";
@@ -177,12 +178,6 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
-const defaultPinUsers = [
-  { name: "User", pin: "1111" },
-  { name: "User 5133", pin: "5133" },
-  { name: "User 3868", pin: "3868" },
-];
-
 const elements = {
   businessDate: document.querySelector("#businessDate"),
   previousMonthButton: document.querySelector("#previousMonthButton"),
@@ -347,8 +342,8 @@ function createDefaultState() {
     },
     pinSettings: {
       admin: "1986",
-      user: "1111",
-      users: cloneJson(defaultPinUsers),
+      user: "",
+      users: [],
     },
     uiSettings: {
       mobileEntryDock: "bottom",
@@ -381,8 +376,8 @@ function normalizeStoredState(parsed = {}) {
     },
     pinSettings: {
       admin: parsed.pinSettings?.admin || "1986",
-      user: parsed.pinSettings?.user || "1111",
-      users: mergePinUsers(defaultPinUsers, parsed.pinSettings?.users || [], [{ name: "User", pin: parsed.pinSettings?.user || "1111" }]),
+      user: parsed.pinSettings?.user || "",
+      users: mergePinUsers(parsed.pinSettings?.users || []),
     },
     uiSettings: {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
@@ -462,10 +457,38 @@ function formatAuditBadge(name, timestamp) {
   return `${name} ${new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
+function loadSessionAccess() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    if (!saved?.role || !saved?.user) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+function saveSessionAccess() {
+  if (!accessRole || !currentUser) {
+    sessionStorage.removeItem(SESSION_KEY);
+    return;
+  }
+  sessionStorage.setItem(
+    SESSION_KEY,
+    JSON.stringify({
+      role: accessRole,
+      user: currentUser,
+      activeView,
+      savedAt: new Date().toISOString(),
+    }),
+  );
+}
+
 function mergePinUsers(...userLists) {
   const byPin = new Map();
   userLists.flat().forEach((user) => {
-    const pin = String(user?.pin || "").replace(/\D/g, "").padStart(4, "0").slice(-4);
+    const rawPin = String(user?.pin || "").replace(/\D/g, "");
+    if (!rawPin) return;
+    const pin = rawPin.padStart(4, "0").slice(-4);
     if (!/^\d{4}$/.test(pin)) return;
     byPin.set(pin, { name: user?.name || `User ${pin}`, pin });
   });
@@ -498,6 +521,7 @@ function applyAccessRole(role) {
   }
 
   renderAccessControls();
+  saveSessionAccess();
 }
 
 function renderAccessControls() {
@@ -589,11 +613,7 @@ function resetIdleTimer() {
 }
 
 function normalizeUsers() {
-  const users = mergePinUsers(
-    defaultPinUsers,
-    state.pinSettings?.users || [],
-    [{ name: "User", pin: state.pinSettings?.user || "1111" }],
-  );
+  const users = mergePinUsers(state.pinSettings?.users || []);
   state.pinSettings.users = users;
   return users;
 }
@@ -651,8 +671,8 @@ function addUserPin() {
     return;
   }
 
-  state.pinSettings.users = [...normalizeUsers(), { name, pin }];
-  state.pinSettings.user = state.pinSettings.users[0]?.pin || "1111";
+  state.pinSettings.users = mergePinUsers([...normalizeUsers(), { name, pin }]);
+  state.pinSettings.user = "";
   elements.newUserNameInput.value = "";
   elements.newUserPinInput.value = "";
   persistState();
@@ -2136,6 +2156,7 @@ function setActiveView(view, shouldScroll = false) {
   }
 
   activeView = view;
+  saveSessionAccess();
   elements.viewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.viewButton === view);
   });
@@ -2912,9 +2933,16 @@ setupSectionToggles();
 seedApril2026SheetData();
 hydrateActiveDay();
 updateSortHeaderState();
+const savedSession = loadSessionAccess();
+if (savedSession?.activeView) activeView = savedSession.activeView;
+if (savedSession?.role && savedSession?.user) currentUser = savedSession.user;
 render();
-applyAccessRole(null);
+applyAccessRole(savedSession?.role || null);
 setActiveView(activeView);
 initCloudSync();
-window.setTimeout(() => elements.pinEntry.focus(), 50);
+if (!savedSession?.role) {
+  window.setTimeout(() => elements.pinEntry.focus(), 50);
+} else {
+  resetIdleTimer();
+}
 
