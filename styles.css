@@ -1257,6 +1257,29 @@ input[inputmode="numeric"],
   font-size: 0.9rem;
 }
 
+.scan-review-row.parsed {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.scan-review-row.parsed strong {
+  margin-top: 0;
+  font-family: var(--numeric-font);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-warning {
+  border: 1px solid rgba(255, 184, 77, 0.42);
+  border-radius: 0.75rem;
+  padding: 0.6rem;
+  color: #6b3600;
+  background: rgba(255, 238, 190, 0.9);
+  font-weight: 900;
+}
+
 .scan-photo-details {
   border: 1px solid var(--line);
   border-radius: 0.8rem;
@@ -1285,6 +1308,17 @@ input[inputmode="numeric"],
   max-height: 9rem;
   border-radius: 0.65rem;
   object-fit: cover;
+}
+
+.scan-photo-missing div {
+  display: grid;
+  min-height: 5.5rem;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 0.65rem;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.5);
+  font-weight: 900;
 }
 
 .scan-photo-preview figcaption {
@@ -2219,6 +2253,7 @@ pre {
 
   .hero {
     top: 0;
+    z-index: 110;
     gap: 0.35rem;
     border-radius: 0 0 1rem 1rem;
   }

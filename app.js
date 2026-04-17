@@ -1726,7 +1726,7 @@ function scanTypeLabel(type) {
   return "Lottery report";
 }
 
-function compressScanImage(file, maxWidth = 1400, quality = 0.72) {
+function compressScanImage(file, maxWidth = 1000, quality = 0.62) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Could not read image."));
@@ -1873,7 +1873,12 @@ function renderScanReview() {
             <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
           </figure>
         `
-        : "",
+        : `
+          <figure class="scan-photo-missing">
+            <div>Photo unavailable</div>
+            <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
+          </figure>
+        `,
     )
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
@@ -1992,6 +1997,9 @@ async function applySalesSummaryScan() {
 
   persistState();
   await saveCloudState();
+  (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
+  scanDraft = { type: "", files: [], parsed: null };
+  elements.salesSummaryScanInput.value = "";
   renderTillInputs();
   renderTotals();
   renderScanReview();
@@ -3122,6 +3130,7 @@ function render() {
   renderCashRows();
   renderTillInputs();
   renderTotals();
+  renderScanReview();
   renderOrderSheet();
   renderManagerReports();
 }
