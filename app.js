@@ -178,6 +178,17 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
+const salesSummaryFields = [
+  ["reportDate", "Report date"],
+  ["grossSales", "Gross sales"],
+  ["onlineCancels", "Online cancels"],
+  ["onlineCashes", "Online cashes"],
+  ["cashlessOnlineOnlySales", "Cashless online sale"],
+  ["instantCashes", "Instant cashes"],
+  ["cashlessInstantSales", "Cashless instant sales"],
+  ["adjustments", "Adjustments"],
+];
+
 const elements = {
   businessDate: document.querySelector("#businessDate"),
   previousMonthButton: document.querySelector("#previousMonthButton"),
@@ -360,6 +371,7 @@ function createDefaultState() {
     uiSettings: {
       mobileEntryDock: "bottom",
     },
+    scanRecords: {},
     lastSavedAt: null,
   };
 }
@@ -394,6 +406,7 @@ function normalizeStoredState(parsed = {}) {
     uiSettings: {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
     },
+    scanRecords: parsed.scanRecords || {},
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
   };
@@ -1724,13 +1737,19 @@ function compressScanImage(file, maxWidth = 1400, quality = 0.72) {
               reject(new Error("Could not compress image."));
               return;
             }
-            resolve({
-              name: file.name || `scan-${Date.now()}.jpg`,
-              originalSize: file.size,
-              size: blob.size,
-              blob,
-              url: URL.createObjectURL(blob),
-            });
+            const compressedReader = new FileReader();
+            compressedReader.onerror = () => reject(new Error("Could not prepare compressed image."));
+            compressedReader.onload = () => {
+              resolve({
+                name: file.name || `scan-${Date.now()}.jpg`,
+                originalSize: file.size,
+                size: blob.size,
+                blob,
+                dataUrl: compressedReader.result,
+                url: URL.createObjectURL(blob),
+              });
+            };
+            compressedReader.readAsDataURL(blob);
           },
           "image/jpeg",
           quality,
@@ -1764,6 +1783,38 @@ function buildParserChecklist(type) {
   ];
 }
 
+function normalizeParsedSalesSummary(parsed = {}) {
+  return {
+    reportDate: parsed.reportDate || "",
+    grossSales: normalizeNumber(parsed.grossSales),
+    onlineCancels: normalizeNumber(parsed.onlineCancels),
+    onlineCashes: normalizeNumber(parsed.onlineCashes),
+    cashlessOnlineOnlySales: normalizeNumber(parsed.cashlessOnlineOnlySales),
+    instantCashes: normalizeNumber(parsed.instantCashes),
+    cashlessInstantSales: normalizeNumber(parsed.cashlessInstantSales),
+    adjustments: normalizeNumber(parsed.adjustments),
+    confidence: parsed.confidence || "unknown",
+    warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+  };
+}
+
+function renderParsedSalesSummaryRows(parsed) {
+  const mismatch =
+    parsed.reportDate && parsed.reportDate !== state.businessDate
+      ? `<div class="scan-warning">Receipt date ${parsed.reportDate} differs from selected app date ${state.businessDate}. Submit will switch to ${parsed.reportDate} and save there.</div>`
+      : "";
+  const rows = salesSummaryFields
+    .map(([key, label]) => {
+      const value = key === "reportDate" ? parsed[key] || "Not found" : formatDecimalInput(parsed[key]);
+      return `<div class="scan-review-row parsed"><span>${label}</span><strong>${value}</strong></div>`;
+    })
+    .join("");
+  const warnings = (parsed.warnings || [])
+    .map((warning) => `<div class="scan-warning">${warning}</div>`)
+    .join("");
+  return `${mismatch}${warnings}${rows}`;
+}
+
 function renderScanReview() {
   const files = scanDraft.files || [];
   elements.scanReviewPanel.hidden = !files.length;
@@ -1771,9 +1822,11 @@ function renderScanReview() {
     ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
     : "No scan loaded";
 
-  elements.scanReviewRows.innerHTML = buildParserChecklist(scanDraft.type)
-    .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
-    .join("");
+  elements.scanReviewRows.innerHTML = scanDraft.parsed
+    ? renderParsedSalesSummaryRows(scanDraft.parsed)
+    : buildParserChecklist(scanDraft.type)
+        .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
+        .join("");
 
   elements.scanPhotoPreview.innerHTML = files
     .map(
@@ -1790,6 +1843,36 @@ function renderScanReview() {
   elements.scanParserStatus.textContent = scanDraft.parsed
     ? "Parsed values ready. Review before submitting."
     : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
+}
+
+async function parseSalesSummaryScan() {
+  const firstFile = scanDraft.files?.[0];
+  if (!firstFile) return;
+
+  if (!supabaseClient) {
+    elements.scanParserStatus.textContent = "Supabase is not connected, so parsing cannot run yet.";
+    return;
+  }
+
+  elements.scanParserStatus.textContent = "Parsing Sales Summary...";
+  elements.applyScanButton.disabled = true;
+
+  const formData = new FormData();
+  formData.append("image", firstFile.blob, firstFile.name);
+  formData.append("businessDate", state.businessDate);
+
+  const { data, error } = await supabaseClient.functions.invoke("parse-sales-summary", {
+    body: formData,
+  });
+
+  if (error) {
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse image"}`;
+    return;
+  }
+
+  const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
+  scanDraft.parsed = parsed;
+  renderScanReview();
 }
 
 async function handleScanFiles(type, fileList) {
@@ -1809,6 +1892,9 @@ async function handleScanFiles(type, fileList) {
 
   scanDraft = { type, files: compressed, parsed: null };
   renderScanReview();
+  if (type === "sales-summary") {
+    parseSalesSummaryScan();
+  }
 }
 
 function clearScanReview() {
@@ -1817,6 +1903,57 @@ function clearScanReview() {
   elements.salesSummaryScanInput.value = "";
   elements.manualInstantScanInput.value = "";
   renderScanReview();
+}
+
+async function applySalesSummaryScan() {
+  if (scanDraft.type !== "sales-summary" || !scanDraft.parsed) return;
+
+  const parsed = normalizeParsedSalesSummary(scanDraft.parsed);
+  const targetDate = parsed.reportDate || state.businessDate;
+  const ok = await showAppConfirm({
+    eyebrow: "Submit scan",
+    title: "Apply Sales Summary to receipt date?",
+    body: `This saves parsed totals to ${targetDate}. If that differs from the current app date, the app will switch to the receipt date first.`,
+    confirmText: "Submit reviewed scan",
+    cancelText: "Keep reviewing",
+  });
+  if (!ok) return;
+
+  if (targetDate !== state.businessDate) {
+    switchDate(targetDate);
+  }
+
+  state.till = normalizeTill({
+    ...state.till,
+    grossSales: parsed.grossSales,
+    onlineCancels: parsed.onlineCancels,
+    onlineCashes: parsed.onlineCashes,
+    cashlessOnlineOnlySales: parsed.cashlessOnlineOnlySales,
+    instantCashes: parsed.instantCashes,
+    cashlessInstantSales: parsed.cashlessInstantSales,
+    adjustments: parsed.adjustments,
+  });
+  syncActiveDayDraft();
+
+  state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
+  state.scanRecords[state.businessDate].push({
+    type: scanDraft.type,
+    savedAt: new Date().toISOString(),
+    savedBy: currentUserName(),
+    selectedBusinessDate: state.businessDate,
+    parsedReportDate: parsed.reportDate || "",
+    parsed,
+    photo: {
+      name: scanDraft.files[0]?.name || "sales-summary.jpg",
+      size: scanDraft.files[0]?.size || 0,
+      dataUrl: scanDraft.files[0]?.dataUrl || "",
+    },
+  });
+
+  persistState();
+  renderTillInputs();
+  renderTotals();
+  elements.scanParserStatus.textContent = `Sales Summary saved to ${state.businessDate}.`;
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
@@ -3006,7 +3143,11 @@ elements.manualInstantScanInput.addEventListener("change", (event) => {
 });
 elements.clearScanReviewButton.addEventListener("click", clearScanReview);
 elements.applyScanButton.addEventListener("click", () => {
-  elements.scanParserStatus.textContent = "Parser is not connected yet. No values were applied.";
+  if (scanDraft.type === "sales-summary") {
+    applySalesSummaryScan();
+    return;
+  }
+  elements.scanParserStatus.textContent = "Manual instant parser is not connected yet. No values were applied.";
 });
 elements.pinEntry.addEventListener("input", (event) => {
   const value = event.target.value.replace(/\D/g, "").slice(0, 4);
