@@ -244,8 +244,19 @@ const elements = {
   authSignUpButton: document.querySelector("#authSignUpButton"),
   authSignOutButton: document.querySelector("#authSignOutButton"),
   cloudSyncButton: document.querySelector("#cloudSyncButton"),
-  headerSyncButton: document.querySelector("#headerSyncButton"),
   mobileSyncButton: document.querySelector("#mobileSyncButton"),
+  mobileLockButton: document.querySelector("#mobileLockButton"),
+  scanSalesSummaryButton: document.querySelector("#scanSalesSummaryButton"),
+  scanManualInstantButton: document.querySelector("#scanManualInstantButton"),
+  salesSummaryScanInput: document.querySelector("#salesSummaryScanInput"),
+  manualInstantScanInput: document.querySelector("#manualInstantScanInput"),
+  scanReviewPanel: document.querySelector("#scanReviewPanel"),
+  scanReviewTitle: document.querySelector("#scanReviewTitle"),
+  scanReviewRows: document.querySelector("#scanReviewRows"),
+  scanPhotoPreview: document.querySelector("#scanPhotoPreview"),
+  clearScanReviewButton: document.querySelector("#clearScanReviewButton"),
+  applyScanButton: document.querySelector("#applyScanButton"),
+  scanParserStatus: document.querySelector("#scanParserStatus"),
   pinOverlay: document.querySelector("#pinOverlay"),
   pinEntry: document.querySelector("#pinEntry"),
   pinMessage: document.querySelector("#pinMessage"),
@@ -288,6 +299,7 @@ let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
 let reconcileVisible = false;
+let scanDraft = { type: "", files: [], parsed: null };
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
@@ -427,7 +439,6 @@ function renderAuthState() {
   elements.authActions.hidden = true;
   elements.authSignOutButton.hidden = true;
   elements.cloudSyncButton.disabled = !online;
-  elements.headerSyncButton.disabled = !online;
   elements.mobileSyncButton.disabled = !online;
   elements.authSignInButton.disabled = true;
   elements.authSignUpButton.disabled = true;
@@ -1688,6 +1699,126 @@ function renderTotals() {
   renderMonthMatrix();
 }
 
+function scanTypeLabel(type) {
+  if (type === "sales-summary") return "Sales Summary";
+  if (type === "manual-instant") return "Manual Instant Sold";
+  return "Lottery report";
+}
+
+function compressScanImage(file, maxWidth = 1400, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read image."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.onload = () => {
+        const scale = Math.min(1, maxWidth / image.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("Could not compress image."));
+              return;
+            }
+            resolve({
+              name: file.name || `scan-${Date.now()}.jpg`,
+              originalSize: file.size,
+              size: blob.size,
+              blob,
+              url: URL.createObjectURL(blob),
+            });
+          },
+          "image/jpeg",
+          quality,
+        );
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(size) {
+  if (!size) return "0 KB";
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildParserChecklist(type) {
+  if (type === "sales-summary") {
+    return [
+      "Parse date below SALES SUMMARY - DAY, not the printed header date.",
+      "Auto-fill gross, cancels, online cashes, cashless online, instant cashes, cashless instant, and adjustments.",
+      "Show +/- difference after review before final submit.",
+    ];
+  }
+
+  return [
+    "Match by 4-digit game #, not by game name.",
+    "Allow negative sold amounts like 1086 = -$80.",
+    "Combine repeated/stacked lines like 1053 = $50 when the same game appears more than once.",
+  ];
+}
+
+function renderScanReview() {
+  const files = scanDraft.files || [];
+  elements.scanReviewPanel.hidden = !files.length;
+  elements.scanReviewTitle.textContent = files.length
+    ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
+    : "No scan loaded";
+
+  elements.scanReviewRows.innerHTML = buildParserChecklist(scanDraft.type)
+    .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
+    .join("");
+
+  elements.scanPhotoPreview.innerHTML = files
+    .map(
+      (file, index) => `
+        <figure>
+          <img src="${file.url}" alt="${scanTypeLabel(scanDraft.type)} scan ${index + 1}" />
+          <figcaption>${formatBytes(file.originalSize)} -> ${formatBytes(file.size)}</figcaption>
+        </figure>
+      `,
+    )
+    .join("");
+
+  elements.applyScanButton.disabled = !scanDraft.parsed;
+  elements.scanParserStatus.textContent = scanDraft.parsed
+    ? "Parsed values ready. Review before submitting."
+    : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
+}
+
+async function handleScanFiles(type, fileList) {
+  const files = Array.from(fileList || []).filter((file) => file.type.startsWith("image/"));
+  if (!files.length) return;
+
+  elements.scanReviewPanel.hidden = false;
+  elements.scanReviewTitle.textContent = "Compressing photo...";
+  elements.scanReviewRows.innerHTML = "";
+  elements.scanPhotoPreview.innerHTML = "";
+  elements.scanParserStatus.textContent = "Compressing photo...";
+
+  const compressed = [];
+  for (const file of files) {
+    compressed.push(await compressScanImage(file));
+  }
+
+  scanDraft = { type, files: compressed, parsed: null };
+  renderScanReview();
+}
+
+function clearScanReview() {
+  (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
+  scanDraft = { type: "", files: [], parsed: null };
+  elements.salesSummaryScanInput.value = "";
+  elements.manualInstantScanInput.value = "";
+  renderScanReview();
+}
+
 function renderInstantMismatch(instantSales, manualInstant) {
   const difference = manualInstant - instantSales;
   const isMismatch = Math.abs(difference) > 0.009;
@@ -2509,13 +2640,16 @@ function renderOrderSheet() {
 
   elements.orderRows.querySelectorAll("[data-dc-box]").forEach((input) => {
     input.disabled = false;
-    input.addEventListener("change", async (event) => {
-      const id = event.target.dataset.dcBox;
-      const nextChecked = event.target.checked;
+    const requestDcChange = async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const id = input.dataset.dcBox;
       const previousChecked = Boolean(state.orderDc[id]);
+      const nextChecked = !previousChecked;
       const game = inventory.find((item) => gameId(item) === id);
 
-      event.target.checked = previousChecked;
+      input.checked = previousChecked;
       const ok = await showAppConfirm({
         eyebrow: "DC safety check",
         title: nextChecked ? "Mark this game DC?" : "Remove DC from this game?",
@@ -2525,7 +2659,7 @@ function renderOrderSheet() {
       });
 
       if (!ok) {
-        event.target.checked = previousChecked;
+        input.checked = previousChecked;
         return;
       }
 
@@ -2535,6 +2669,11 @@ function renderOrderSheet() {
       renderGames();
       renderSummary();
       renderMonthMatrix();
+    };
+
+    input.addEventListener("click", requestDcChange);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === " " || event.key === "Enter") requestDcChange(event);
     });
   });
 
@@ -2853,11 +2992,21 @@ elements.authSignOutButton.addEventListener("click", signOutOfCloud);
 elements.cloudSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
-elements.headerSyncButton.addEventListener("click", () => {
-  loadCloudState();
-});
 elements.mobileSyncButton.addEventListener("click", () => {
   loadCloudState();
+});
+elements.mobileLockButton.addEventListener("click", () => lockApp());
+elements.scanSalesSummaryButton.addEventListener("click", () => elements.salesSummaryScanInput.click());
+elements.scanManualInstantButton.addEventListener("click", () => elements.manualInstantScanInput.click());
+elements.salesSummaryScanInput.addEventListener("change", (event) => {
+  handleScanFiles("sales-summary", event.target.files);
+});
+elements.manualInstantScanInput.addEventListener("change", (event) => {
+  handleScanFiles("manual-instant", event.target.files);
+});
+elements.clearScanReviewButton.addEventListener("click", clearScanReview);
+elements.applyScanButton.addEventListener("click", () => {
+  elements.scanParserStatus.textContent = "Parser is not connected yet. No values were applied.";
 });
 elements.pinEntry.addEventListener("input", (event) => {
   const value = event.target.value.replace(/\D/g, "").slice(0, 4);

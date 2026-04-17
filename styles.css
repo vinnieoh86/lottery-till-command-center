@@ -10,7 +10,7 @@
   --amber: #ffb84d;
   --red: #b33a3a;
   --line: rgba(23, 33, 27, 0.14);
-  --numeric-font: "Cascadia Mono", "Consolas", "Lucida Console", monospace;
+  --numeric-font: "Archivo", sans-serif;
   --shadow: 0 24px 70px rgba(31, 38, 34, 0.17);
 }
 
@@ -229,11 +229,11 @@ select:focus {
 }
 
 #cloudSyncButton {
-  border: 2px solid #083344;
-  color: #041014;
-  background: linear-gradient(135deg, #67e8f9, #22d3ee);
-  box-shadow: none;
-  font-size: 0.82rem;
+  border: 2px solid #0b3a75 !important;
+  color: #f7fbff !important;
+  background: linear-gradient(135deg, #0ea5ff, #155eef) !important;
+  box-shadow: none !important;
+  font-size: 0.9rem;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -241,7 +241,7 @@ select:focus {
 #cloudSyncButton:hover,
 .header-sync-button:hover,
 .mobile-sync-strip button:hover {
-  background: linear-gradient(135deg, #a5f3fc, #67e8f9);
+  background: linear-gradient(135deg, #38bdf8, #2563eb) !important;
 }
 
 .subtle-signout {
@@ -592,12 +592,12 @@ h2 {
 }
 
 .header-sync-button {
-  border: 2px solid #083344;
-  color: #041014;
-  background: linear-gradient(135deg, #67e8f9, #22d3ee);
-  box-shadow: none;
+  border: 2px solid #7a2500 !important;
+  color: #1a0a00 !important;
+  background: linear-gradient(135deg, #ffcf33, #ff6b00) !important;
+  box-shadow: none !important;
   padding: 0.62rem 0.78rem !important;
-  font-size: 0.88rem !important;
+  font-size: 0.92rem !important;
   font-weight: 900;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -661,9 +661,10 @@ h2 {
   padding: 0.28rem 0.55rem;
   color: var(--green);
   background: rgba(207, 255, 55, 0.2);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
+  font-family: var(--numeric-font);
+  font-size: 0.88rem;
   font-weight: 900;
+  font-variant-numeric: tabular-nums;
 }
 
 .month-variance-badge.negative {
@@ -790,13 +791,14 @@ h2 {
   right: 0.32rem;
   bottom: 0.28rem;
   border-radius: 999px;
-  padding: 0.1rem 0.24rem;
-  background: rgba(207, 255, 55, 0.2);
+  padding: 0.16rem 0.36rem;
+  background: rgba(207, 255, 55, 0.34);
   color: var(--green);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.54rem;
+  font-family: var(--numeric-font);
+  font-size: 0.72rem;
   font-style: normal;
   font-weight: 900;
+  letter-spacing: -0.01em;
 }
 
 .day-variance.negative {
@@ -883,12 +885,24 @@ td[data-output] {
 
 [data-static="bookNumber"],
 [data-static="value"],
+input[type="number"],
+input[inputmode="decimal"],
+input[inputmode="numeric"],
+.pill-value,
+.locked-chip,
+.today-ending-input,
+.manual-instant-input,
 .cash-row input,
 .form-grid input[type="number"],
 .order-qty-input,
 .keepup-table input,
 .month-matrix-table td,
-.summary-table td {
+.summary-table td,
+.day-card strong,
+.day-card small,
+.day-variance,
+.month-variance-badge {
+  font-family: var(--numeric-font) !important;
   font-variant-numeric: tabular-nums;
 }
 
@@ -900,7 +914,7 @@ td[data-output] {
   border-radius: 999px;
   padding: 0.2rem 0.48rem;
   font-family: var(--numeric-font);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
 }
@@ -1162,6 +1176,122 @@ td[data-output] {
   padding: 1rem;
   background: var(--coal);
   color: #f7f1df;
+}
+
+.scan-card {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+  border: 1px solid rgba(31, 122, 79, 0.22);
+  border-radius: 1.05rem;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.scan-card h3 {
+  margin: 0.12rem 0 0.25rem;
+  font-size: 1.02rem;
+}
+
+.scan-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.scan-actions,
+.scan-review-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.scan-actions button,
+.scan-review-actions button {
+  min-height: 2.75rem;
+}
+
+.scan-review-panel {
+  display: grid;
+  gap: 0.7rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.scan-review-header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.scan-review-header h3 {
+  margin: 0.12rem 0 0;
+}
+
+.scan-review-rows {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.scan-review-row {
+  border: 1px solid rgba(23, 33, 27, 0.1);
+  border-radius: 0.75rem;
+  padding: 0.55rem;
+  background: rgba(255, 250, 236, 0.74);
+}
+
+.scan-review-row span,
+.scan-review-actions span {
+  display: block;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.scan-review-row strong {
+  display: block;
+  margin-top: 0.14rem;
+  font-size: 0.9rem;
+}
+
+.scan-photo-details {
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  padding: 0.55rem;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.scan-photo-details summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.scan-photo-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.scan-photo-preview figure {
+  margin: 0;
+}
+
+.scan-photo-preview img {
+  width: 100%;
+  max-height: 9rem;
+  border-radius: 0.65rem;
+  object-fit: cover;
+}
+
+.scan-photo-preview figcaption {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-align: center;
 }
 
 .report-panel {
@@ -2021,7 +2151,7 @@ pre {
 
   .mobile-sync-strip {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     gap: 0.38rem;
     align-items: center;
     margin: 0 0 0.42rem;
@@ -2043,18 +2173,23 @@ pre {
 
   .mobile-sync-strip button {
     border-radius: 0.65rem;
-    border: 2px solid #083344;
+    border: 2px solid #0b3a75 !important;
     padding: 0.55rem 0.72rem;
-    color: #041014;
-    background: linear-gradient(135deg, #67e8f9, #22d3ee);
-    box-shadow: none;
-    font-size: 0.8rem;
+    color: #f7fbff !important;
+    background: linear-gradient(135deg, #0ea5ff, #155eef) !important;
+    box-shadow: none !important;
+    font-size: 0.86rem;
     font-weight: 900;
     text-transform: uppercase;
   }
 
   .mobile-sync-strip button:disabled {
     opacity: 0.5;
+  }
+
+  .mobile-sync-strip .mobile-lock-button {
+    border-color: rgba(255, 255, 255, 0.28) !important;
+    background: rgba(255, 255, 255, 0.12) !important;
   }
 
   .nav-link {
@@ -2071,6 +2206,8 @@ pre {
   .report-grid,
   .form-grid,
   .cash-grid,
+  .scan-actions,
+  .scan-review-actions,
   .order-controls,
   .order-grid {
     grid-template-columns: 1fr;
@@ -2212,7 +2349,7 @@ pre {
   #daily-entry .pill-value,
   #daily-entry .locked-chip {
     padding: 0.16rem 0.42rem;
-    font-size: 0.66rem;
+    font-size: 0.76rem;
   }
 
   #daily-entry .pill-value {
@@ -2384,3 +2521,4 @@ pre {
     text-align: left;
   }
 }
+
