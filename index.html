@@ -29,8 +29,13 @@
           <button class="nav-link" type="button" data-view-button="history">History</button>
           <button class="nav-link" type="button" data-view-button="month">Month View</button>
           <button class="nav-link" type="button" data-view-button="order">Order Sheet</button>
+          <button class="nav-link admin-only" type="button" data-view-button="reports">Reports</button>
           <button class="nav-link admin-only" type="button" data-view-button="settings">Settings</button>
         </nav>
+        <section class="mobile-sync-strip">
+          <span id="mobileSyncStatus">Local draft</span>
+          <button id="mobileSyncButton" type="button">Sync now</button>
+        </section>
         <button id="clearActiveTabButton" class="danger-button" type="button">Clear this tab</button>
 
         <section class="sync-card">
@@ -79,8 +84,8 @@
               <button id="todayButton" type="button">Today</button>
               <button id="nextMonthButton" class="ghost-button" type="button">Next day</button>
             </div>
-            <button id="headerSyncButton" class="ghost-button header-sync-button" type="button">Sync</button>
             <button id="seedMonthButton" type="button">Build selected month</button>
+            <button id="headerSyncButton" class="ghost-button header-sync-button" type="button">Sync now</button>
           </div>
         </header>
 
@@ -90,20 +95,13 @@
               <p class="eyebrow">Auto month</p>
               <h2 id="monthTitle">April 2026</h2>
             </div>
+            <span id="monthVarianceBadge" class="month-variance-badge admin-only">$0.00</span>
             <span class="toggle-label">Maximize</span>
           </button>
           <div id="month-strip-body" class="panel-body" hidden>
             <p class="formula-note compact-note">Defaults to today's date. Sundays are blacked out. Green dots are edited drafts; checked days are completed and protected.</p>
             <div id="calendarDays" class="calendar-grid"></div>
           </div>
-        </section>
-
-        <section id="previousDateGuard" class="previous-date-guard app-view" data-view="daily till" hidden>
-          <div>
-            <strong>Previous date locked</strong>
-            <span id="previousDateGuardText">Saved dates are read-only until an admin unlocks them.</span>
-          </div>
-          <button id="unlockPreviousDateButton" type="button">Unlock previous date</button>
         </section>
 
         <section id="daily-entry" class="panel collapsible-panel app-view" data-view="daily till">
@@ -429,6 +427,70 @@
             <h3>Completed order records</h3>
             <p class="save-location-note">Saved locally and synced to Supabase when signed in.</p>
             <div id="savedOrderRows" class="saved-order-list"></div>
+          </div>
+        </section>
+
+        <section id="manager-reports" class="panel report-panel app-view admin-only" data-view="reports">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Manager reports</p>
+              <h2>Sales, cashes, tickets, and variance</h2>
+            </div>
+            <span>Admin-only view for store performance and cash control.</span>
+          </div>
+          <div class="summary-tabs report-range-tabs" role="tablist" aria-label="Manager report range">
+            <button type="button" data-report-range="day" class="ghost-button">Daily</button>
+            <button type="button" data-report-range="week" class="ghost-button">Weekly</button>
+            <button type="button" data-report-range="month">Monthly</button>
+            <button type="button" data-report-range="quarter" class="ghost-button">Quarterly</button>
+            <button type="button" data-report-range="year" class="ghost-button">Yearly</button>
+          </div>
+          <div id="managerReportCards" class="manager-report-grid"></div>
+          <div class="split-panel manager-report-split">
+            <section>
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">Game signal</p>
+                  <h3>Top / low selling games</h3>
+                </div>
+              </div>
+              <div class="table-wrap compact-table-wrap">
+                <table class="manager-report-table">
+                  <thead>
+                    <tr>
+                      <th>Box</th>
+                      <th>Game #</th>
+                      <th>Game</th>
+                      <th>$</th>
+                      <th>Tickets</th>
+                      <th>Sales</th>
+                    </tr>
+                  </thead>
+                  <tbody id="managerGameReportRows"></tbody>
+                </table>
+              </div>
+            </section>
+            <section>
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">Daily close</p>
+                  <h3>Variance by day</h3>
+                </div>
+              </div>
+              <div class="table-wrap compact-table-wrap">
+                <table class="manager-report-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Lottery</th>
+                      <th>Drawer</th>
+                      <th>+/-</th>
+                    </tr>
+                  </thead>
+                  <tbody id="managerDayReportRows"></tbody>
+                </table>
+              </div>
+            </section>
           </div>
         </section>
 

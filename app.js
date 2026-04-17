@@ -185,6 +185,7 @@ const elements = {
   seedMonthButton: document.querySelector("#seedMonthButton"),
   calendarDays: document.querySelector("#calendarDays"),
   monthTitle: document.querySelector("#monthTitle"),
+  monthVarianceBadge: document.querySelector("#monthVarianceBadge"),
   dailyCountDate: document.querySelector("#dailyCountDate"),
   gameRows: document.querySelector("#gameRows"),
   dailyEntrySection: document.querySelector("#daily-entry"),
@@ -192,9 +193,6 @@ const elements = {
   gameRowTemplate: document.querySelector("#gameRowTemplate"),
   editInventoryButton: document.querySelector("#editInventoryButton"),
   saveDayButton: document.querySelector("#saveDayButton"),
-  previousDateGuard: document.querySelector("#previousDateGuard"),
-  previousDateGuardText: document.querySelector("#previousDateGuardText"),
-  unlockPreviousDateButton: document.querySelector("#unlockPreviousDateButton"),
   closedDayNotice: document.querySelector("#closedDayNotice"),
   instantSalesCard: document.querySelector("#instantSalesCard"),
   manualInstantCard: document.querySelector("#manualInstantCard"),
@@ -216,6 +214,7 @@ const elements = {
   auditLog: document.querySelector("#auditLog"),
   exportButton: document.querySelector("#exportButton"),
   syncStatus: document.querySelector("#syncStatus"),
+  mobileSyncStatus: document.querySelector("#mobileSyncStatus"),
   weekViewButton: document.querySelector("#weekViewButton"),
   monthViewButton: document.querySelector("#monthViewButton"),
   summaryValueFilter: document.querySelector("#summaryValueFilter"),
@@ -223,6 +222,10 @@ const elements = {
   summaryRows: document.querySelector("#summaryRows"),
   monthMatrixHead: document.querySelector("#monthMatrixHead"),
   monthMatrixRows: document.querySelector("#monthMatrixRows"),
+  managerReportCards: document.querySelector("#managerReportCards"),
+  managerGameReportRows: document.querySelector("#managerGameReportRows"),
+  managerDayReportRows: document.querySelector("#managerDayReportRows"),
+  reportRangeButtons: document.querySelectorAll("[data-report-range]"),
   orderDate: document.querySelector("#orderDate"),
   backstockWeeks: document.querySelector("#backstockWeeks"),
   highTicketThreshold: document.querySelector("#highTicketThreshold"),
@@ -240,6 +243,7 @@ const elements = {
   authSignOutButton: document.querySelector("#authSignOutButton"),
   cloudSyncButton: document.querySelector("#cloudSyncButton"),
   headerSyncButton: document.querySelector("#headerSyncButton"),
+  mobileSyncButton: document.querySelector("#mobileSyncButton"),
   pinOverlay: document.querySelector("#pinOverlay"),
   pinEntry: document.querySelector("#pinEntry"),
   pinMessage: document.querySelector("#pinMessage"),
@@ -277,6 +281,7 @@ inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
+let managerReportRange = "month";
 let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
@@ -290,7 +295,6 @@ let pinUnlockInProgress = false;
 let lastPinTap = { key: "", at: 0 };
 let idleLockTimer = null;
 let activeMobileGameIndex = 0;
-let completedDayEditUnlocks = new Set();
 let previousDateDraft = null;
 let suppressNextMobileAutoAdvance = false;
 
@@ -330,7 +334,6 @@ function createDefaultState() {
     orderDc: Object.fromEntries([...dcBoxes].map((box) => [box, true])),
     extraOrders: cloneExtraOrders(),
     savedOrders: [],
-    previousDateUnlocks: {},
     orderSettings: {
       date: todayIso(),
       backstockWeeks: 2.5,
@@ -365,7 +368,6 @@ function normalizeStoredState(parsed = {}) {
     orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
     extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
     savedOrders: parsed.savedOrders || [],
-    previousDateUnlocks: parsed.previousDateUnlocks || {},
     orderSettings: {
       date: parsed.orderSettings?.date || todayIso(),
       backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
@@ -413,6 +415,9 @@ function getSerializableState() {
 
 function setSyncStatus(message) {
   elements.syncStatus.textContent = message;
+  if (elements.mobileSyncStatus) {
+    elements.mobileSyncStatus.textContent = message;
+  }
 }
 
 function renderAuthState() {
@@ -421,6 +426,7 @@ function renderAuthState() {
   elements.authSignOutButton.hidden = !email;
   elements.cloudSyncButton.disabled = !email;
   elements.headerSyncButton.disabled = !email;
+  elements.mobileSyncButton.disabled = !email;
   elements.authSignInButton.disabled = !supabaseClient || Boolean(email);
   elements.authSignUpButton.disabled = !supabaseClient || Boolean(email);
 
@@ -713,7 +719,14 @@ async function saveCloudState() {
 }
 
 async function loadCloudState() {
-  if (!supabaseClient || !currentSession) return;
+  if (!supabaseClient) {
+    setSyncStatus("Supabase offline");
+    return;
+  }
+  if (!currentSession) {
+    setSyncStatus("Team login required");
+    return;
+  }
 
   setSyncStatus("Loading cloud");
   const { data, error } = await supabaseClient
@@ -953,10 +966,22 @@ function getDateRange(mode = summaryMode) {
   const start = new Date(selectedDate);
   const end = new Date(selectedDate);
 
-  if (mode === "week") {
+  if (mode === "day") {
+    // Keep selected day as-is.
+  } else if (mode === "week") {
     const mondayOffset = (selectedDate.getDay() + 6) % 7;
     start.setDate(selectedDate.getDate() - mondayOffset);
     end.setDate(start.getDate() + 6);
+  } else if (mode === "month") {
+    start.setDate(1);
+    end.setMonth(start.getMonth() + 1, 0);
+  } else if (mode === "quarter") {
+    const quarterStartMonth = Math.floor(selectedDate.getMonth() / 3) * 3;
+    start.setMonth(quarterStartMonth, 1);
+    end.setMonth(quarterStartMonth + 3, 0);
+  } else if (mode === "year") {
+    start.setMonth(0, 1);
+    end.setMonth(11, 31);
   } else {
     start.setDate(1);
     end.setMonth(start.getMonth() + 1, 0);
@@ -1111,6 +1136,37 @@ function calculateCashDrawer() {
   return calculateCashDrawerFromCounts(state.cashCounts);
 }
 
+function calculateManualInstantForDate(date) {
+  return inventory.reduce((sum, game) => sum + normalizeNumber(getEntry(game, date).manualInstantSold), 0);
+}
+
+function getSavedDayTotals(date) {
+  const log = state.dailyLogs[date] || {};
+  const till = normalizeTill(log.till || {});
+  const cashCounts = log.cashCounts || {};
+  const lotterySales = log.totals?.lotterySales ?? calculateLotterySalesForTill(till, date);
+  const cashDrawer = log.totals?.cashDrawer ?? calculateCashDrawerFromCounts(cashCounts);
+  const instantSales = log.totals?.instantSales ?? calculateInstantSales(date);
+  const manualInstantSold = log.totals?.manualInstantSold ?? calculateManualInstantForDate(date);
+  const ticketsSold = log.totals?.ticketsSold ?? calculateTicketsTotal(date);
+
+  return {
+    date,
+    lotterySales,
+    cashDrawer,
+    variance: cashDrawer - lotterySales,
+    instantSales,
+    manualInstantSold,
+    ticketsSold,
+    grossSales: normalizeNumber(till.grossSales),
+    onlineCashes: normalizeNumber(till.onlineCashes),
+    instantCashes: normalizeNumber(till.instantCashes),
+    cashlessOnlineSales: normalizeNumber(till.cashlessOnlineSales),
+    cashlessInstantSales: normalizeNumber(till.cashlessInstantSales),
+    officePayout: normalizeNumber(till.officePayout),
+  };
+}
+
 function hydrateActiveDay() {
   const dayLog = getDayLog();
   state.till = normalizeTill(dayLog.till);
@@ -1136,12 +1192,8 @@ function isSavedPastDate(date = state.businessDate) {
   return !isTodayDate(date) && Boolean(state.dailyLogs[date]?.savedAt);
 }
 
-function isPreviousDateUnlocked(date = state.businessDate) {
-  return Boolean(state.previousDateUnlocks?.[date]) || completedDayEditUnlocks.has(date);
-}
-
 function isPastDateLocked(date = state.businessDate) {
-  return isSavedPastDate(date) && !isPreviousDateUnlocked(date);
+  return isSavedPastDate(date) && !isAdminRole();
 }
 
 function isPreviousDateDraftMode(date = state.businessDate) {
@@ -1150,7 +1202,7 @@ function isPreviousDateDraftMode(date = state.businessDate) {
 
 function persistIfLiveDate(statusText = "Autosaved") {
   if (isPreviousDateDraftMode()) {
-    elements.syncStatus.textContent = "Previous date draft - press Complete day to save";
+    elements.syncStatus.textContent = "Previous date edit pending";
     return;
   }
 
@@ -1166,55 +1218,19 @@ function selectedDateLabel(date = state.businessDate) {
   });
 }
 
-function renderPreviousDateGuard() {
-  const locked = isSavedPastDate();
-  const unlocked = isPreviousDateUnlocked(state.businessDate);
-  const unlockInfo = state.previousDateUnlocks?.[state.businessDate];
-  const dateLabel = selectedDateLabel();
-
-  elements.previousDateGuard.hidden = !locked;
-  if (!locked) return;
-
-  elements.previousDateGuard.classList.toggle("unlocked", unlocked);
-  const unlockedBy = unlockInfo?.unlockedBy ? ` by ${unlockInfo.unlockedBy}` : "";
-  const unlockedAt = unlockInfo?.unlockedAt ? ` at ${new Date(unlockInfo.unlockedAt).toLocaleTimeString()}` : "";
-  elements.previousDateGuardText.textContent = unlocked
-    ? isAdminRole()
-      ? `${dateLabel} is unlocked${unlockedBy}${unlockedAt}. Admin can edit; Complete day relocks it.`
-      : `${dateLabel} is unlocked${unlockedBy}${unlockedAt} for review. User mode remains read-only.`
-    : `${dateLabel} has saved data. It is read-only until an admin unlocks it.`;
-  elements.unlockPreviousDateButton.hidden = !isAdminRole() || unlocked;
+function resolvePreviousDateDraftBeforeLeaving() {
+  if (!previousDateDraft) return;
+  previousDateDraft = null;
+  elements.syncStatus.textContent = "Previous date edit mode closed";
 }
 
-function unlockPreviousDate() {
-  if (!isSavedPastDate()) return;
-
-  state.previousDateUnlocks = {
-    ...(state.previousDateUnlocks || {}),
-    [state.businessDate]: {
-      unlockedBy: currentUserName(),
-      unlockedAt: new Date().toISOString(),
-    },
-  };
-  completedDayEditUnlocks.add(state.businessDate);
+function ensurePreviousDateDraft() {
+  if (!isAdminRole() || !isSavedPastDate()) return;
+  if (previousDateDraft?.date === state.businessDate) return;
   previousDateDraft = {
     date: state.businessDate,
     dayLog: cloneJson(state.dailyLogs[state.businessDate]),
   };
-  hydrateActiveDay();
-  elements.syncStatus.textContent = "Previous date unlocked";
-  persistState();
-  render();
-}
-
-function resolvePreviousDateDraftBeforeLeaving() {
-  if (!previousDateDraft) return;
-  const draftDate = previousDateDraft.date;
-  previousDateDraft = null;
-  if (!state.previousDateUnlocks?.[draftDate]) {
-    completedDayEditUnlocks.delete(draftDate);
-  }
-  elements.syncStatus.textContent = "Previous date edit mode closed";
 }
 
 function canEditActiveDay(targetInput) {
@@ -1223,19 +1239,8 @@ function canEditActiveDay(targetInput) {
   const isProtectedDate = Boolean(dayLog?.savedAt && !isToday) || isCompletedDay();
 
   if (!isProtectedDate) return true;
-  if (isPreviousDateUnlocked(state.businessDate)) return true;
-
-  const dateLabel = new Date(`${state.businessDate}T12:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  const reason = isCompletedDay() ? "marked COMPLETE" : "already saved";
-  const ok = window.confirm(`${dateLabel} is ${reason} and protected.\n\nAre you sure you want to unlock and edit this date?`);
-
-  if (ok) {
-    completedDayEditUnlocks.add(state.businessDate);
-    elements.syncStatus.textContent = "Saved day unlocked for editing";
+  if (isAdminRole()) {
+    ensurePreviousDateDraft();
     return true;
   }
 
@@ -1292,7 +1297,7 @@ async function confirmPreviousDateFieldChange(field, previousValue, renderRevert
   const ok = await showAppConfirm({
     eyebrow: "Previous date",
     title: "Save this change?",
-    body: `${selectedDateLabel()} is unlocked. Save this entry change?`,
+    body: `${selectedDateLabel()} already has saved data. Save this entry change?`,
     confirmText: "Save change",
     cancelText: "Undo",
   });
@@ -1332,6 +1337,13 @@ function renderCalendar() {
     day: "numeric",
     year: "numeric",
   });
+  const monthlyVariance = selectedMonthDates().reduce((sum, date) => {
+    if (!state.dailyLogs[date]?.savedAt) return sum;
+    return sum + getSavedDayTotals(date).variance;
+  }, 0);
+  elements.monthVarianceBadge.textContent = `${monthlyVariance >= 0 ? "+" : ""}${currency.format(monthlyVariance)}`;
+  elements.monthVarianceBadge.classList.toggle("positive", monthlyVariance >= 0);
+  elements.monthVarianceBadge.classList.toggle("negative", monthlyVariance < 0);
   elements.calendarDays.innerHTML = "";
 
   for (let day = 1; day <= daysInMonth; day += 1) {
@@ -1365,6 +1377,7 @@ function switchDate(isoDate) {
   reconcileVisible = false;
   elements.businessDate.value = isoDate;
   hydrateActiveDay();
+  ensurePreviousDateDraft();
   persistState();
   render();
 }
@@ -1850,10 +1863,6 @@ function saveDay() {
     state.dailyLogs[state.businessDate] = cloneJson(dayLog);
     previousDateDraft = null;
   }
-  if (state.previousDateUnlocks?.[state.businessDate]) {
-    delete state.previousDateUnlocks[state.businessDate];
-  }
-  completedDayEditUnlocks.delete(state.businessDate);
   state.lastSavedAt = dayLog.savedAt;
   elements.syncStatus.textContent = "Day completed and locked";
   persistState();
@@ -1965,6 +1974,107 @@ function renderSummary() {
   });
 }
 
+function renderManagerReports() {
+  if (!isAdminRole()) return;
+
+  elements.reportRangeButtons.forEach((button) => {
+    const active = button.dataset.reportRange === managerReportRange;
+    button.classList.toggle("ghost-button", !active);
+  });
+
+  const dates = savedDatesInRange(managerReportRange);
+  const dayRows = dates.map(getSavedDayTotals);
+  const totals = dayRows.reduce(
+    (acc, row) => {
+      acc.lotterySales += row.lotterySales;
+      acc.cashDrawer += row.cashDrawer;
+      acc.variance += row.variance;
+      acc.instantSales += row.instantSales;
+      acc.manualInstantSold += row.manualInstantSold;
+      acc.ticketsSold += row.ticketsSold;
+      acc.grossSales += row.grossSales;
+      acc.cashes += row.onlineCashes + row.instantCashes + row.officePayout;
+      acc.cashless += row.cashlessOnlineSales + row.cashlessInstantSales;
+      return acc;
+    },
+    {
+      lotterySales: 0,
+      cashDrawer: 0,
+      variance: 0,
+      instantSales: 0,
+      manualInstantSold: 0,
+      ticketsSold: 0,
+      grossSales: 0,
+      cashes: 0,
+      cashless: 0,
+    },
+  );
+  const avgDailyLottery = dates.length ? totals.lotterySales / dates.length : 0;
+  const mismatch = totals.manualInstantSold - totals.instantSales;
+  const biggestVariance = dayRows.reduce((winner, row) => (Math.abs(row.variance) > Math.abs(winner.variance || 0) ? row : winner), {});
+
+  const cards = [
+    ["Saved days", dates.length],
+    ["Total lottery sales", currency.format(totals.lotterySales)],
+    ["Cash drawer total", currency.format(totals.cashDrawer)],
+    ["Cash +/- variance", `${totals.variance >= 0 ? "+" : ""}${currency.format(totals.variance)}`],
+    ["Instant sales", currency.format(totals.instantSales)],
+    ["Manual instant", currency.format(totals.manualInstantSold)],
+    ["Manual mismatch", `${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)}`],
+    ["Tickets sold", totals.ticketsSold],
+    ["Avg lottery/day", currency.format(avgDailyLottery)],
+    ["Gross sales", currency.format(totals.grossSales)],
+    ["Total cashes/payout", currency.format(totals.cashes)],
+    ["Cashless sales", currency.format(totals.cashless)],
+  ];
+
+  elements.managerReportCards.innerHTML = cards
+    .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
+    .join("");
+
+  const gameRows = inventory
+    .filter((game) => game.value !== "")
+    .map((game) => {
+      const tickets = dates.reduce((sum, date) => sum + calculateTicketsSold(game, date), 0);
+      const sales = tickets * normalizeNumber(game.value);
+      return { game, tickets, sales };
+    })
+    .filter((row) => row.tickets > 0)
+    .sort((a, b) => b.sales - a.sales || b.tickets - a.tickets)
+    .slice(0, 12);
+
+  elements.managerGameReportRows.innerHTML =
+    gameRows
+      .map(
+        ({ game, tickets, sales }) => `
+          <tr>
+            <td>${game.box}</td>
+            <td>${game.bookNumber || "-"}</td>
+            <td>${game.name || "-"}</td>
+            <td>${formatGameValue(game)}</td>
+            <td>${tickets}</td>
+            <td>${currency.format(sales)}</td>
+          </tr>
+        `,
+      )
+      .join("") || `<tr><td colspan="6">No saved game sales in this range.</td></tr>`;
+
+  const sortedDayRows = [...dayRows].sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
+  elements.managerDayReportRows.innerHTML =
+    sortedDayRows
+      .map(
+        (row) => `
+          <tr>
+            <td>${row.date}${row.date === biggestVariance.date ? " *" : ""}</td>
+            <td>${currency.format(row.lotterySales)}</td>
+            <td>${currency.format(row.cashDrawer)}</td>
+            <td class="${row.variance < 0 ? "negative-text" : "positive-text"}">${row.variance >= 0 ? "+" : ""}${currency.format(row.variance)}</td>
+          </tr>
+        `,
+      )
+      .join("") || `<tr><td colspan="4">No saved daily closes in this range.</td></tr>`;
+}
+
 function compareSummaryRows(a, b, key) {
   const valueMap = {
     box: [a.game.box, b.game.box],
@@ -2053,10 +2163,11 @@ function setActiveView(view, shouldScroll = false) {
     const targetMap = {
       daily: elements.dailyEntrySection,
       till: elements.tillSection,
-      history: document.querySelector("#history"),
-      month: document.querySelector("#month-analysis"),
-      order: document.querySelector("#order-sheet"),
-    };
+    history: document.querySelector("#history"),
+    month: document.querySelector("#month-analysis"),
+    order: document.querySelector("#order-sheet"),
+    reports: document.querySelector("#manager-reports"),
+  };
     const target = targetMap[view];
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -2071,6 +2182,7 @@ function clearActiveTab() {
     history: "saved daily logs for the selected month",
     month: "saved daily logs for the selected month",
     order: "current reorder QTY inputs",
+    reports: "manager report data for the selected range",
   };
 
   const message = `Clear ${labelMap[activeView] || "this tab"}? This cannot be undone.`;
@@ -2573,6 +2685,7 @@ function buildCurrentOrderSnapshot() {
         name: game.name,
         dc: Boolean(state.orderDc[gameId(game)]),
         qty: normalizeNumber(state.orderInventory[gameId(game)]),
+        stockOnHand: normalizeNumber(state.orderInventory[gameId(game)]),
         need: recommendation.need,
         averageTickets: recommendation.averageTickets,
         updatedBy: state.orderAudit[gameId(game)]?.updatedBy || "",
@@ -2634,10 +2747,10 @@ function renderSavedOrders() {
         const orderRows = order.rows
           .filter((row) => row.need > 0)
           .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }))
-          .map((row) => `<tr><td>${row.box}</td><td>${currency.format(row.value).replace(".00", "")}</td><td>${row.bookNumber || "-"}</td><td>${row.name}</td><td>${row.need}</td></tr>`)
+          .map((row) => `<tr><td>${row.box}</td><td>${currency.format(row.value).replace(".00", "")}</td><td>${row.bookNumber || "-"}</td><td>${row.name}</td><td class="stock-on-hand-cell">${row.stockOnHand ?? row.qty ?? 0}</td><td class="order-needed-cell">${row.need}</td></tr>`)
           .join("");
         const extraRows = (order.extraOrders || [])
-          .map((item) => `<tr><td>-</td><td>SUPPLY</td><td>-</td><td>${item.name}</td><td>${normalizeNumber(item.orderNeeded)}${item.unit ? ` ${item.unit}` : ""}</td></tr>`)
+          .map((item) => `<tr><td>-</td><td>SUPPLY</td><td>-</td><td>${item.name}</td><td class="stock-on-hand-cell">${normalizeNumber(item.qty)}</td><td class="order-needed-cell">${normalizeNumber(item.orderNeeded)}${item.unit ? ` ${item.unit}` : ""}</td></tr>`)
           .join("");
         return `
           <details class="saved-order-item">
@@ -2647,8 +2760,8 @@ function renderSavedOrders() {
               <small>${order.completedBy || "Unknown"} - ${new Date(order.savedAt).toLocaleString()}</small>
             </summary>
             <table class="saved-order-detail">
-              <thead><tr><th>Box</th><th>$</th><th>Game #</th><th>Game</th><th>Order</th></tr></thead>
-              <tbody>${orderRows || `<tr><td colspan="5">No game books needed.</td></tr>`}${extraRows}</tbody>
+              <thead><tr><th>Box</th><th>$</th><th>Game #</th><th>Game</th><th>Stock</th><th>Order</th></tr></thead>
+              <tbody>${orderRows || `<tr><td colspan="6">No game books needed.</td></tr>`}${extraRows}</tbody>
             </table>
           </details>
         `;
@@ -2659,12 +2772,12 @@ function renderSavedOrders() {
 
 function render() {
   renderCalendar();
-  renderPreviousDateGuard();
   renderGames();
   renderCashRows();
   renderTillInputs();
   renderTotals();
   renderOrderSheet();
+  renderManagerReports();
 }
 
 elements.businessDate.value = state.businessDate;
@@ -2685,7 +2798,6 @@ elements.editInventoryButton.addEventListener("click", () => {
   renderGames();
 });
 elements.saveDayButton.addEventListener("click", saveDay);
-elements.unlockPreviousDateButton.addEventListener("click", unlockPreviousDate);
 elements.exportButton.addEventListener("click", exportJson);
 elements.orderDate.value = state.orderSettings.date;
 elements.backstockWeeks.value = state.orderSettings.backstockWeeks;
@@ -2714,6 +2826,9 @@ elements.cloudSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
 elements.headerSyncButton.addEventListener("click", () => {
+  loadCloudState();
+});
+elements.mobileSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
 elements.pinEntry.addEventListener("input", (event) => {
@@ -2760,6 +2875,12 @@ elements.weekViewButton.addEventListener("click", () => setSummaryMode("week"));
 elements.monthViewButton.addEventListener("click", () => setSummaryMode("month"));
 elements.summaryValueFilter.addEventListener("change", setSummaryFilters);
 elements.monthValueFilter.addEventListener("change", setSummaryFilters);
+elements.reportRangeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    managerReportRange = button.dataset.reportRange;
+    renderManagerReports();
+  });
+});
 elements.sortHeaders.forEach((button) => {
   button.addEventListener("click", () => setSummarySortFromHeader(button.dataset.sortKey));
 });
