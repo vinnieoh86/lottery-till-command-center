@@ -270,6 +270,8 @@ const elements = {
   scanReviewRows: document.querySelector("#scanReviewRows"),
   scanPhotoPreview: document.querySelector("#scanPhotoPreview"),
   clearScanReviewButton: document.querySelector("#clearScanReviewButton"),
+  addScanPageButton: document.querySelector("#addScanPageButton"),
+  parseScanPagesButton: document.querySelector("#parseScanPagesButton"),
   applyScanButton: document.querySelector("#applyScanButton"),
   scanParserStatus: document.querySelector("#scanParserStatus"),
   pinOverlay: document.querySelector("#pinOverlay"),
@@ -2135,6 +2137,10 @@ function renderScanReview() {
     button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
   });
 
+  const manualBatchWaiting = scanDraft.type === "manual-instant" && files.length && !scanDraft.parsed;
+  elements.addScanPageButton.hidden = !manualBatchWaiting;
+  elements.parseScanPagesButton.hidden = !manualBatchWaiting;
+  elements.parseScanPagesButton.disabled = isClosed || !manualBatchWaiting;
   elements.applyScanButton.hidden = userUploadOnly;
   elements.applyScanButton.disabled = isClosed || !scanDraft.parsed;
   elements.scanParserStatus.textContent = scanDraft.parsed
@@ -2143,7 +2149,9 @@ function renderScanReview() {
       : "Parsed values ready. Review before submitting."
     : isClosed
       ? "Closed day locked. Scanning is disabled for Sundays."
-      : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
+      : manualBatchWaiting
+        ? `Added ${files.length} ticket page${files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`
+        : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
 }
 
 async function parseSalesSummaryScan() {
@@ -2358,14 +2366,20 @@ function loadPendingScanForReview(index) {
 }
 
 async function invokeSalesSummaryParser(formData) {
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-sales-summary`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-    body: formData,
-  });
+  const functionName = "parse-sales-summary";
+  let response;
+  try {
+    response = await fetch(`${SUPABASE_URL}/functions/v1/${functionName}`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(`Could not reach ${functionName}. Check internet connection, Supabase function deploy, and CORS. ${error.message || ""}`.trim());
+  }
   const text = await response.text();
   let payload = {};
   try {
@@ -2385,14 +2399,20 @@ async function invokeSalesSummaryParser(formData) {
 }
 
 async function invokeManualInstantParser(formData) {
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-manual-instant`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-    body: formData,
-  });
+  const functionName = "parse-manual-instant";
+  let response;
+  try {
+    response = await fetch(`${SUPABASE_URL}/functions/v1/${functionName}`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(`Could not reach ${functionName}. This usually means the Supabase Edge Function is not deployed yet, the function name differs, or the browser blocked the request. ${error.message || ""}`.trim());
+  }
   const text = await response.text();
   let payload = {};
   try {
@@ -2467,14 +2487,19 @@ async function handleScanFiles(type, fileList) {
     compressed.push(await compressScanImage(file));
   }
 
-  scanDraft = { type, files: compressed, parsed: null };
+  if (type === "manual-instant" && scanDraft.type === "manual-instant" && !scanDraft.parsed) {
+    scanDraft.files = [...(scanDraft.files || []), ...compressed];
+  } else {
+    (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
+    scanDraft = { type, files: compressed, parsed: null };
+  }
   renderScanReview();
   if (type === "sales-summary") {
     parseSalesSummaryScan();
     return;
   }
   if (type === "manual-instant") {
-    parseManualInstantScan();
+    elements.scanParserStatus.textContent = `Added ${scanDraft.files.length} ticket page${scanDraft.files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`;
   }
 }
 
@@ -3954,13 +3979,26 @@ elements.mobileSyncButton.addEventListener("click", () => {
   loadCloudState();
 });
 elements.mobileLockButton.addEventListener("click", () => lockApp());
-elements.scanSalesSummaryButton.addEventListener("click", () => elements.salesSummaryScanInput.click());
-elements.scanManualInstantButton.addEventListener("click", () => elements.manualInstantScanInput.click());
+elements.scanSalesSummaryButton.addEventListener("click", () => {
+  elements.salesSummaryScanInput.value = "";
+  elements.salesSummaryScanInput.click();
+});
+elements.scanManualInstantButton.addEventListener("click", () => {
+  elements.manualInstantScanInput.value = "";
+  elements.manualInstantScanInput.click();
+});
 elements.salesSummaryScanInput.addEventListener("change", (event) => {
   handleScanFiles("sales-summary", event.target.files);
 });
 elements.manualInstantScanInput.addEventListener("change", (event) => {
   handleScanFiles("manual-instant", event.target.files);
+});
+elements.addScanPageButton.addEventListener("click", () => {
+  elements.manualInstantScanInput.value = "";
+  elements.manualInstantScanInput.click();
+});
+elements.parseScanPagesButton.addEventListener("click", () => {
+  parseManualInstantScan();
 });
 elements.clearScanReviewButton.addEventListener("click", clearScanReview);
 elements.applyScanButton.addEventListener("click", () => {

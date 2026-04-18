@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260418-3" />
+    <link rel="stylesheet" href="styles.css?v=20260418-4" />
   </head>
   <body>
     <div class="shell">
@@ -247,6 +247,8 @@
                   <div id="scanPhotoPreview" class="scan-photo-preview"></div>
                 </details>
                 <div class="scan-review-actions">
+                  <button id="addScanPageButton" class="ghost-button" type="button" hidden>Add page</button>
+                  <button id="parseScanPagesButton" type="button" hidden>Parse pages</button>
                   <button id="applyScanButton" type="button" disabled>Submit reviewed scan</button>
                   <span id="scanParserStatus">Parser not connected yet. Photos are ready for OCR wiring.</span>
                 </div>
@@ -642,6 +644,6 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260418-3"></script>
+    <script src="app.js?v=20260418-4"></script>
   </body>
 </html>
