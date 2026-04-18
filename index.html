@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260418-5" />
+    <link rel="stylesheet" href="styles.css?v=20260418-6" />
   </head>
   <body>
     <div class="shell">
@@ -37,7 +37,10 @@
           <button id="mobileSyncButton" type="button">Sync now</button>
           <button id="mobileLockButton" class="mobile-lock-button" type="button">Lock</button>
         </section>
-        <button id="clearActiveTabButton" class="danger-button" type="button">Clear this tab</button>
+        <div class="clear-column-actions admin-only">
+          <button id="clearEndingButton" class="danger-button" type="button">Clear endings</button>
+          <button id="clearManualButton" class="danger-button" type="button">Clear manual</button>
+        </div>
 
         <section class="sync-card">
           <span class="pulse"></span>
@@ -87,7 +90,7 @@
               <button id="todayButton" type="button">Today</button>
               <button id="nextMonthButton" class="ghost-button" type="button">Next day</button>
             </div>
-            <button id="seedMonthButton" type="button">Build selected month</button>
+            <button id="seedMonthButton" type="button" hidden>Build selected month</button>
           </div>
         </header>
 
@@ -639,11 +642,14 @@
         <td data-output="sales">$0.00</td>
         <td><input data-field="manualInstantSold" class="manual-instant-input" type="number" step="1" inputmode="decimal" /></td>
         <td data-output="runningTickets">0</td>
-        <td><span class="locked-chip">Locked</span></td>
+        <td>
+          <span class="locked-chip ending-chip">End</span>
+          <span class="locked-chip manual-chip">Manual</span>
+        </td>
       </tr>
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260418-5"></script>
+    <script src="app.js?v=20260418-6"></script>
   </body>
 </html>

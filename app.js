@@ -250,7 +250,8 @@ const elements = {
   extraBooksRows: document.querySelector("#extraBooksRows"),
   saveWeeklyOrderButton: document.querySelector("#saveWeeklyOrderButton"),
   savedOrderRows: document.querySelector("#savedOrderRows"),
-  clearActiveTabButton: document.querySelector("#clearActiveTabButton"),
+  clearEndingButton: document.querySelector("#clearEndingButton"),
+  clearManualButton: document.querySelector("#clearManualButton"),
   authEmail: document.querySelector("#authEmail"),
   authPassword: document.querySelector("#authPassword"),
   authActions: document.querySelector("#authActions"),
@@ -542,7 +543,8 @@ function applyAccessRole(role) {
   document.body.classList.toggle("user-mode", role === "user");
   elements.pinOverlay.hidden = Boolean(role);
   elements.pinRoleLabel.textContent = role ? currentUserName().toUpperCase() : "Locked";
-  elements.clearActiveTabButton.hidden = !isAdminRole();
+  elements.clearEndingButton.hidden = !isAdminRole();
+  elements.clearManualButton.hidden = !isAdminRole();
 
   elements.viewButtons.forEach((button) => {
     const allowed = isRoleAllowedView(button.dataset.viewButton);
@@ -564,7 +566,7 @@ function renderAccessControls() {
   elements.editInventoryButton.hidden = !admin;
   elements.saveDayButton.hidden = false;
   elements.exportButton.hidden = !admin;
-  elements.seedMonthButton.hidden = !admin;
+  elements.seedMonthButton.hidden = true;
   elements.adminPinInput.value = state.pinSettings.admin;
   elements.confirmAdminPinInput.value = "";
   elements.newUserNameInput.value = "";
@@ -1565,14 +1567,26 @@ function renderGames() {
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
-    const editorChip = row.querySelector(".locked-chip");
-    if (editorChip) {
-      const editedBy = entry.updatedBy || entry.completedBy || "Locked";
-      const editedAt = entry.updatedAt || entry.completedAt || "";
-      editorChip.textContent = formatAuditBadge(editedBy === "Locked" ? "" : editedBy, editedAt);
-      editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
-      editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy || entry.completedBy));
+    const endingChip = row.querySelector(".ending-chip");
+    if (endingChip) {
+      const endingBy = entry.todayEndingUpdatedBy || entry.updatedBy || entry.completedBy || "";
+      const endingAt = entry.todayEndingUpdatedAt || entry.updatedAt || entry.completedAt || "";
+      endingChip.textContent = formatAuditBadge(endingBy, endingAt) || "End";
+      endingChip.title = endingAt ? `Ending updated ${new Date(endingAt).toLocaleString()} by ${endingBy || "unknown"}` : "Ending not updated yet";
+      endingChip.classList.toggle("edited-chip", Boolean(endingBy));
     }
+    const manualChip = row.querySelector(".manual-chip");
+    if (manualChip) {
+      const manualBy = entry.manualInstantUpdatedBy || "";
+      const manualAt = entry.manualInstantUpdatedAt || "";
+      manualChip.textContent = formatAuditBadge(manualBy, manualAt) || "Manual";
+      manualChip.title = manualAt ? `Manual sold updated ${new Date(manualAt).toLocaleString()} by ${manualBy || "unknown"}` : "Manual sold not updated yet";
+      manualChip.classList.toggle("edited-chip", Boolean(manualBy));
+    }
+    const manualValue = normalizeNumber(entry.manualInstantSold);
+    const autoValue = calculateGameSales(game);
+    const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
+    row.classList.toggle("manual-mismatch-row", hasManual && Math.abs(manualValue - autoValue) >= 0.01);
 
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
@@ -1995,8 +2009,9 @@ function renderParsedManualInstantRows(parsed) {
   const matchedRows = rows
     .map(({ game, gameNumber, amount }) => {
       const autoSales = game ? calculateGameSales(game, targetDate) : 0;
+      const isMismatch = game && Math.abs(normalizeNumber(amount) - autoSales) >= 0.01;
       return `
-        <label class="scan-review-row parsed editable manual-review-row">
+        <label class="scan-review-row parsed editable manual-review-row${isMismatch ? " scan-row-mismatch" : " scan-row-match"}">
           <span>${gameNumber} ${game?.name || "Unmatched game #"}</span>
           <input data-manual-game="${gameNumber}" type="number" inputmode="decimal" step="0.01" value="${formatDecimalInput(amount)}" />
           <strong>${game ? `Auto ${currency.format(autoSales)}` : "Needs assignment"}</strong>
@@ -2298,8 +2313,10 @@ function applyManualInstantParsedToEntries(parsed, date = state.businessDate) {
     if (!game) return;
     const entry = getEntry(game, date);
     entry.manualInstantSold = amount;
-    entry.updatedBy = currentUserName();
-    entry.updatedAt = new Date().toISOString();
+    entry.manualInstantUpdatedBy = currentUserName();
+    entry.manualInstantUpdatedAt = new Date().toISOString();
+    entry.updatedBy = entry.manualInstantUpdatedBy;
+    entry.updatedAt = entry.manualInstantUpdatedAt;
   });
   const dayLog = getDayLog(date);
   dayLog.totals = buildTotals();
@@ -2516,6 +2533,19 @@ async function handleScanFiles(type, fileList) {
   }
   if (type === "manual-instant") {
     elements.scanParserStatus.textContent = `Added ${scanDraft.files.length} ticket page${scanDraft.files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`;
+    const addAnother = await showAppConfirm({
+      eyebrow: "Manual ticket pages",
+      title: `${scanDraft.files.length} page${scanDraft.files.length === 1 ? "" : "s"} added`,
+      body: "Add another ticket history photo, or finish and parse this batch now.",
+      confirmText: "Add page",
+      cancelText: "Finish",
+    });
+    if (addAnother) {
+      elements.manualInstantScanInput.value = "";
+      elements.manualInstantScanInput.click();
+    } else {
+      parseManualInstantScan();
+    }
   }
 }
 
@@ -2756,19 +2786,31 @@ function updateEntry(game, key, value, row) {
   const nextValue = value === "" ? "" : normalizeNumber(value);
   const changed = String(entry[key] ?? "") !== String(nextValue);
   entry[key] = nextValue;
-  if (changed && ["todayEnding", "manualInstantSold"].includes(key)) {
-    entry.updatedBy = currentUserName();
-    entry.updatedAt = new Date().toISOString();
+  if (changed && key === "todayEnding") {
+    entry.todayEndingUpdatedBy = currentUserName();
+    entry.todayEndingUpdatedAt = new Date().toISOString();
+    entry.updatedBy = entry.todayEndingUpdatedBy;
+    entry.updatedAt = entry.todayEndingUpdatedAt;
+  }
+  if (changed && key === "manualInstantSold") {
+    entry.manualInstantUpdatedBy = currentUserName();
+    entry.manualInstantUpdatedAt = new Date().toISOString();
+    entry.updatedBy = entry.manualInstantUpdatedBy;
+    entry.updatedAt = entry.manualInstantUpdatedAt;
   }
 
   row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
   row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
-  const editorChip = row.querySelector(".locked-chip");
-  if (editorChip) {
-    editorChip.textContent = formatAuditBadge(entry.updatedBy, entry.updatedAt);
-    editorChip.title = entry.updatedAt ? `Last updated ${new Date(entry.updatedAt).toLocaleString()}` : "Inventory fields locked";
-    editorChip.classList.toggle("edited-chip", Boolean(entry.updatedBy));
+  const endingChip = row.querySelector(".ending-chip");
+  if (endingChip) {
+    endingChip.textContent = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt) || "End";
+    endingChip.classList.toggle("edited-chip", Boolean(entry.todayEndingUpdatedBy || entry.updatedBy));
+  }
+  const manualChip = row.querySelector(".manual-chip");
+  if (manualChip) {
+    manualChip.textContent = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt) || "Manual";
+    manualChip.classList.toggle("edited-chip", Boolean(entry.manualInstantUpdatedBy));
   }
 
   persistIfLiveDate();
@@ -3161,59 +3203,35 @@ function setActiveView(view, shouldScroll = false) {
   renderMobileEntryBar();
 }
 
-function clearActiveTab() {
-  const labelMap = {
-    daily: "daily ticket counts for the selected date",
-    till: "lottery totals and cash drawer counts for the selected date",
-    history: "saved daily logs for the selected month",
-    month: "saved daily logs for the selected month",
-    order: "current reorder QTY inputs",
-    reports: "manager report data for the selected range",
-  };
+async function clearEntryColumn(column) {
+  const isManual = column === "manualInstantSold";
+  const ok = await showAppConfirm({
+    eyebrow: "Clear daily column",
+    title: isManual ? "Clear all manual instant sold values?" : "Clear all ending ticket numbers?",
+    body: `This clears the ${isManual ? "Manual Instant Sold" : "Today Ending #"} column for ${state.businessDate}. Other columns stay untouched.`,
+    confirmText: isManual ? "Clear manual" : "Clear endings",
+    cancelText: "Cancel",
+  });
+  if (!ok) return;
 
-  const message = `Clear ${labelMap[activeView] || "this tab"}? This cannot be undone.`;
-  if (!window.confirm(message)) return;
-
-  if (activeView === "order") {
-    elements.syncStatus.textContent = "Order sheet is excluded from Clear this tab.";
-    return;
-  }
-
-  if (activeView === "daily") {
-    const dayLog = getDayLog();
-    dayLog.entries = {};
-    dayLog.savedAt = null;
-  } else if (activeView === "till") {
-    state.till = normalizeTill();
-    state.cashCounts = emptyCashCounts();
-    const dayLog = getDayLog();
-    dayLog.till = normalizeTill();
-    dayLog.cashCounts = emptyCashCounts();
-  } else if (activeView === "history" || activeView === "month") {
-    selectedMonthDates().forEach((date) => {
-      delete state.dailyLogs[date];
-    });
-  }
-
-  if (activeView === "daily" || activeView === "till") {
-    const dayLog = state.dailyLogs[state.businessDate];
-    if (dayLog) {
-      const hasEntries = Object.values(dayLog.entries || {}).some((entry) => entry.todayEnding !== "" || entry.manualInstantSold !== "");
-      const hasTill = Object.values(normalizeTill(dayLog.till || {})).some((value) => normalizeNumber(value));
-      const hasCash = Object.values(dayLog.cashCounts || {}).some((value) => normalizeNumber(value));
-      if (!hasEntries && !hasTill && !hasCash) {
-        delete state.dailyLogs[state.businessDate];
-        delete state.scanRecords[state.businessDate];
-      } else {
-        dayLog.totals = buildTotals();
-        dayLog.savedAt = null;
-        dayLog.completedAt = null;
-        dayLog.completedBy = "";
-      }
+  const dayLog = getDayLog();
+  Object.values(dayLog.entries || {}).forEach((entry) => {
+    entry[column] = "";
+    if (isManual) {
+      entry.manualInstantUpdatedBy = currentUserName();
+      entry.manualInstantUpdatedAt = new Date().toISOString();
+    } else {
+      entry.todayEndingUpdatedBy = currentUserName();
+      entry.todayEndingUpdatedAt = new Date().toISOString();
     }
-  }
-
+  });
+  dayLog.totals = buildTotals();
+  dayLog.savedAt = new Date().toISOString();
+  dayLog.completedAt = null;
+  dayLog.completedBy = "";
+  state.lastSavedAt = dayLog.savedAt;
   persistState();
+  await saveCloudState();
   hydrateActiveDay();
   render();
   setActiveView(activeView);
@@ -3989,7 +4007,8 @@ elements.highTicketThreshold.addEventListener("input", (event) => {
   renderOrderSheet();
 });
 elements.saveWeeklyOrderButton.addEventListener("click", saveWeeklyOrder);
-elements.clearActiveTabButton.addEventListener("click", clearActiveTab);
+elements.clearEndingButton.addEventListener("click", () => clearEntryColumn("todayEnding"));
+elements.clearManualButton.addEventListener("click", () => clearEntryColumn("manualInstantSold"));
 elements.authSignInButton.addEventListener("click", signInToCloud);
 elements.authSignUpButton.addEventListener("click", signUpForCloud);
 elements.authSignOutButton.addEventListener("click", signOutOfCloud);
