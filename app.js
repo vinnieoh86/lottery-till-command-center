@@ -735,6 +735,18 @@ function renderMobileEntryBar() {
   elements.mobileNextBoxButton.disabled = safeIndex >= total - 1;
 }
 
+function setDailyEntryDateLabel(date = state.businessDate) {
+  const selectedDate = new Date(`${date}T12:00:00`);
+  elements.dailyCountDate.textContent = selectedDate.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  elements.dailyEntrySection.dataset.businessDate = date;
+  elements.gameRows.dataset.businessDate = date;
+}
+
 function toggleMobileEntryDock() {
   const currentDock = state.uiSettings?.mobileEntryDock || "bottom";
   state.uiSettings = {
@@ -1453,6 +1465,12 @@ function renderCalendar() {
 }
 
 function switchDate(isoDate) {
+  if (!isoDate || isoDate === state.businessDate) {
+    setDailyEntryDateLabel(state.businessDate);
+    renderGames();
+    renderMobileEntryBar();
+    return;
+  }
   if (previousDateDraft?.date === state.businessDate && isoDate !== state.businessDate) {
     resolvePreviousDateDraftBeforeLeaving();
     hydrateActiveDay();
@@ -1462,12 +1480,22 @@ function switchDate(isoDate) {
   }
   if (previousDateDraft?.date !== isoDate) previousDateDraft = null;
   state.businessDate = isoDate;
+  activeMobileGameIndex = 0;
+  document.activeElement?.blur?.();
   reconcileVisible = false;
   elements.businessDate.value = isoDate;
+  setDailyEntryDateLabel(isoDate);
+  elements.gameRows.innerHTML = "";
   hydrateActiveDay();
   ensurePreviousDateDraft();
   persistState();
   render();
+  setActiveView(activeView);
+  window.setTimeout(() => {
+    setDailyEntryDateLabel(state.businessDate);
+    renderGames();
+    renderMobileEntryBar();
+  }, 0);
 }
 
 function selectedDateIsClosed() {
@@ -1491,6 +1519,7 @@ function formatGameValue(game) {
 }
 
 function renderGames() {
+  setDailyEntryDateLabel(state.businessDate);
   elements.gameRows.innerHTML = "";
   const isClosed = selectedDateIsClosed();
   const isLocked = isActiveDayLockedForRole();
@@ -3864,6 +3893,8 @@ function printOrderSheet(orderId) {
 }
 
 function render() {
+  elements.businessDate.value = state.businessDate;
+  setDailyEntryDateLabel(state.businessDate);
   renderCalendar();
   renderGames();
   renderCashRows();
