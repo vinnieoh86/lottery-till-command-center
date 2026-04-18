@@ -1389,6 +1389,16 @@ function pendingScanRecordsForDate(date) {
   return (state.scanRecords?.[date] || []).filter((record) => record.status === "pending-review");
 }
 
+function pendingScanLabelForDate(date) {
+  const pending = pendingScanRecordsForDate(date);
+  if (!pending.length) return "";
+  const types = new Set(pending.map((record) => record.type));
+  if (types.has("manual-instant") && types.has("sales-summary")) return "Sales + tickets";
+  if (types.has("manual-instant")) return "Tickets";
+  if (types.has("sales-summary")) return "Sales";
+  return "Review";
+}
+
 function renderCalendar() {
   const selectedDate = new Date(`${state.businessDate}T12:00:00`);
   const year = selectedDate.getFullYear();
@@ -1427,9 +1437,10 @@ function renderCalendar() {
     if (dayLog?.completedAt) card.classList.add("completed");
     if (isAdminRole() && pendingScanRecordsForDate(isoDate).length) card.classList.add("needs-review");
     const status = dayLog?.completedAt ? "<small>Done</small>" : dayLog?.savedAt ? "<small>Draft</small>" : "";
+    const reviewLabel = pendingScanLabelForDate(isoDate);
     const reviewBadge =
-      isAdminRole() && pendingScanRecordsForDate(isoDate).length
-        ? `<b class="review-alert">Review ${pendingScanRecordsForDate(isoDate).length}</b>`
+      isAdminRole() && reviewLabel
+        ? `<b class="review-alert">${reviewLabel}</b>`
         : "";
     const varianceBadge =
       isAdminRole() && dayLog?.savedAt
@@ -1888,6 +1899,90 @@ function renderParsedSalesSummaryRows(parsed) {
   return `${mismatch}${warnings}${rows}`;
 }
 
+function normalizeManualInstantParsed(parsed = {}) {
+  const totalsMap = {};
+  const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
+  sourceTotals.forEach((item) => {
+    const gameNumber = String(item.gameNumber || "").trim().padStart(4, "0");
+    if (!gameNumber || gameNumber === "0000") return;
+    totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(item.amount);
+  });
+
+  if (!sourceTotals.length && Array.isArray(parsed.lines)) {
+    parsed.lines.forEach((line) => {
+      if (line.duplicate) return;
+      const gameNumber = String(line.gameNumber || "").trim().padStart(4, "0");
+      if (!gameNumber || gameNumber === "0000") return;
+      totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(line.amount);
+    });
+  }
+
+  return {
+    lines: Array.isArray(parsed.lines) ? parsed.lines : [],
+    totalsByGame: Object.entries(totalsMap).map(([gameNumber, amount]) => ({ gameNumber, amount })),
+    duplicatesRemoved: Array.isArray(parsed.duplicatesRemoved) ? parsed.duplicatesRemoved : [],
+    unmatchedLines: Array.isArray(parsed.unmatchedLines) ? parsed.unmatchedLines : [],
+    warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+  };
+}
+
+function manualInstantMatchedRows(parsed = scanDraft.parsed) {
+  const normalized = normalizeManualInstantParsed(parsed || {});
+  return normalized.totalsByGame
+    .map((item) => {
+      const game = inventory.find((candidate) => String(candidate.bookNumber || "").padStart(4, "0") === item.gameNumber);
+      return {
+        game,
+        gameNumber: item.gameNumber,
+        amount: normalizeNumber(item.amount),
+      };
+    })
+    .sort((a, b) => String(a.gameNumber || "").localeCompare(String(b.gameNumber || ""), undefined, { numeric: true }));
+}
+
+function parsedManualInstantTotal(parsed = scanDraft.parsed) {
+  return manualInstantMatchedRows(parsed).reduce((sum, row) => sum + normalizeNumber(row.amount), 0);
+}
+
+function renderParsedManualInstantRows(parsed) {
+  const normalized = normalizeManualInstantParsed(parsed);
+  const rows = manualInstantMatchedRows(normalized);
+  const autoTotal = calculateInstantSales();
+  const parsedTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+  const mismatch = parsedTotal - autoTotal;
+  const warningRows = [
+    ...normalized.warnings.map((warning) => `<div class="scan-warning">${warning}</div>`),
+    ...normalized.unmatchedLines.map((line) => `<div class="scan-warning">Unmatched line page ${line.page || "?"}: ${line.rawText || ""} ${currency.format(normalizeNumber(line.amount))}</div>`),
+  ].join("");
+
+  const matchedRows = rows
+    .map(({ game, gameNumber, amount }) => {
+      const autoSales = game ? calculateGameSales(game) : 0;
+      return `
+        <label class="scan-review-row parsed editable manual-review-row">
+          <span>${gameNumber} ${game?.name || "Unmatched game #"}</span>
+          <input data-manual-game="${gameNumber}" type="number" inputmode="decimal" step="0.01" value="${formatDecimalInput(amount)}" />
+          <strong>${game ? `Auto ${currency.format(autoSales)}` : "Needs assignment"}</strong>
+        </label>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="scan-review-row parsed">
+      <span>Manual instant parsed total</span>
+      <strong>${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})</strong>
+    </div>
+    ${
+      normalized.duplicatesRemoved.length
+        ? `<div class="scan-review-row"><span>Duplicates removed</span><strong>${normalized.duplicatesRemoved.length} overlap line${normalized.duplicatesRemoved.length === 1 ? "" : "s"}</strong></div>`
+        : ""
+    }
+    ${warningRows}
+    ${matchedRows || `<div class="scan-warning">No matched game numbers found. Try clearer photos or review manually.</div>`}
+  `;
+}
+
 function renderScanReview() {
   const files = scanDraft.files || [];
   const savedRecords = state.scanRecords?.[state.businessDate] || [];
@@ -1903,7 +1998,9 @@ function renderScanReview() {
       : "No scan loaded";
 
   const activeRows = scanDraft.parsed
-    ? renderParsedSalesSummaryRows(scanDraft.parsed)
+    ? scanDraft.type === "manual-instant"
+      ? renderParsedManualInstantRows(scanDraft.parsed)
+      : renderParsedSalesSummaryRows(scanDraft.parsed)
     : buildParserChecklist(scanDraft.type)
         .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
         .join("");
@@ -1941,6 +2038,19 @@ function renderScanReview() {
       scanDraft.parsed[key] = normalizeNumber(event.target.value);
     });
   });
+  elements.scanReviewRows.querySelectorAll("[data-manual-game]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      const gameNumber = event.target.dataset.manualGame;
+      if (!scanDraft.parsed || !gameNumber) return;
+      const normalized = normalizeManualInstantParsed(scanDraft.parsed);
+      const target = normalized.totalsByGame.find((item) => item.gameNumber === gameNumber);
+      if (target) target.amount = normalizeNumber(event.target.value);
+      scanDraft.parsed = normalized;
+    });
+    input.addEventListener("change", (event) => {
+      event.target.value = formatDecimalInput(event.target.value);
+    });
+  });
 
   const activePhotos = files
     .map(
@@ -1959,21 +2069,33 @@ function renderScanReview() {
     .slice()
     .reverse()
     .map((record, index) => {
-      const photoSource = record.photo?.url || record.photo?.dataUrl || "";
-      return photoSource
-        ? `
+      const photos = record.photos?.length ? record.photos : record.photo ? [record.photo] : [];
+      return photos.length
+        ? photos
+            .map((photo, photoIndex) => {
+              const photoSource = photo?.url || photo?.dataUrl || "";
+              return photoSource
+                ? `
           <figure>
             <a href="${photoSource}" target="_blank" rel="noopener">
-              <img src="${photoSource}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}" />
+              <img src="${photoSource}" alt="Saved ${scanTypeLabel(record.type)} scan ${index + 1}.${photoIndex + 1}" />
             </a>
             <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
-            <a class="scan-photo-link" href="${photoSource}" download="${record.photo?.name || "sales-summary.jpg"}">Download</a>
+            <a class="scan-photo-link" href="${photoSource}" download="${photo?.name || "scan.jpg"}">Download</a>
           </figure>
         `
+                : `
+          <figure class="scan-photo-missing">
+            <div>Photo unavailable</div>
+            <figcaption>${photo?.uploadError || `Saved ${new Date(record.savedAt).toLocaleString()}`}</figcaption>
+          </figure>
+        `;
+            })
+            .join("")
         : `
           <figure class="scan-photo-missing">
             <div>Photo unavailable</div>
-            <figcaption>${record.photo?.uploadError || `Saved ${new Date(record.savedAt).toLocaleString()}`}</figcaption>
+            <figcaption>Saved ${new Date(record.savedAt).toLocaleString()}</figcaption>
           </figure>
         `;
     })
@@ -2044,6 +2166,125 @@ async function parseSalesSummaryScan() {
   renderScanReview();
 }
 
+async function parseManualInstantScan() {
+  const files = scanDraft.files || [];
+  if (!files.length) return;
+
+  if (!supabaseClient) {
+    elements.scanParserStatus.textContent = "Supabase is not connected, so parsing cannot run yet.";
+    return;
+  }
+
+  elements.scanParserStatus.textContent = `Parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
+  elements.applyScanButton.disabled = true;
+
+  const formData = new FormData();
+  files.forEach((file) => formData.append("images", file.blob, file.name));
+  formData.append("businessDate", state.businessDate);
+
+  let data;
+  try {
+    data = await invokeManualInstantParser(formData);
+  } catch (error) {
+    console.error("Manual instant parser failed", error);
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse ticket pages"}`;
+    return;
+  }
+
+  const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
+  scanDraft.parsed = parsed;
+  await handleManualInstantParsedResult(parsed);
+}
+
+async function handleManualInstantParsedResult(parsed) {
+  const parsedTotal = parsedManualInstantTotal(parsed);
+  const autoTotal = calculateInstantSales();
+  const isMatch = Math.abs(parsedTotal - autoTotal) < 0.01;
+
+  if (isMatch) {
+    applyManualInstantParsedToEntries(parsed);
+    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: true });
+    await showAppNotice({
+      eyebrow: "Upload complete",
+      title: "Complete",
+      body: `Manual instant sold matched auto instant sales at ${currency.format(autoTotal)} and was applied.`,
+      confirmText: "OK",
+    });
+    clearScanReview();
+    render();
+    return;
+  }
+
+  const pendingRecord = await saveReviewedManualInstantScan(parsed, "pending-review", { autoApplied: false });
+  scanDraft.reviewRecordDate = pendingRecord.date;
+  scanDraft.reviewRecordIndex = pendingRecord.index;
+
+  if (isUserRole()) {
+    await showAppNotice({
+      eyebrow: "Upload complete",
+      title: "Complete",
+      body: "Ticket sold pages were uploaded. Manager review is needed before applying them.",
+      confirmText: "OK",
+    });
+    clearScanReview();
+    renderCalendar();
+    return;
+  }
+
+  await showAppNotice({
+    eyebrow: "Manager review",
+    title: "Needs Review!",
+    body: `Manual instant parsed ${currency.format(parsedTotal)}, but auto instant sales are ${currency.format(autoTotal)}. Reconcile before submitting.`,
+    confirmText: "Review now",
+  });
+  renderScanReview();
+  renderCalendar();
+}
+
+function applyManualInstantParsedToEntries(parsed) {
+  manualInstantMatchedRows(parsed).forEach(({ game, amount }) => {
+    if (!game) return;
+    const entry = getEntry(game);
+    entry.manualInstantSold = amount;
+    entry.updatedBy = currentUserName();
+    entry.updatedAt = new Date().toISOString();
+  });
+  const dayLog = getDayLog();
+  dayLog.totals = buildTotals();
+  dayLog.savedAt = new Date().toISOString();
+  state.lastSavedAt = dayLog.savedAt;
+  persistState();
+}
+
+async function saveReviewedManualInstantScan(parsed, status, options = {}) {
+  const photos = await uploadScanPhotos(scanDraft.files || [], state.businessDate);
+  state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
+  const record = {
+    type: "manual-instant",
+    status,
+    savedAt: new Date().toISOString(),
+    savedBy: currentUserName(),
+    reviewedAt: status === "reviewed" ? new Date().toISOString() : "",
+    reviewedBy: status === "reviewed" ? currentUserName() : "",
+    selectedBusinessDate: state.businessDate,
+    parsedReportDate: state.businessDate,
+    parsed,
+    autoApplied: Boolean(options.autoApplied),
+    totals: {
+      parsedManualInstant: parsedManualInstantTotal(parsed),
+      instantSales: calculateInstantSales(),
+      difference: parsedManualInstantTotal(parsed) - calculateInstantSales(),
+    },
+    photos,
+    photo: photos[0] || null,
+  };
+  state.scanRecords[state.businessDate].push(record);
+  const index = state.scanRecords[state.businessDate].length - 1;
+  persistState();
+  await saveCloudState();
+  return { date: state.businessDate, index, record };
+}
+
 async function savePendingSalesSummaryScan(parsed) {
   const targetDate = parsed.reportDate || state.businessDate;
   const photoUpload = await uploadScanPhoto(scanDraft.files[0], targetDate);
@@ -2077,7 +2318,9 @@ function loadPendingScanForReview(index) {
   scanDraft = {
     type: record.type || "sales-summary",
     files: [],
-    parsed: normalizeParsedSalesSummary(record.parsed || {}),
+    parsed: record.type === "manual-instant"
+      ? normalizeManualInstantParsed(record.parsed || {})
+      : normalizeParsedSalesSummary(record.parsed || {}),
     reviewRecordDate: state.businessDate,
     reviewRecordIndex: index,
   };
@@ -2087,6 +2330,33 @@ function loadPendingScanForReview(index) {
 
 async function invokeSalesSummaryParser(formData) {
   const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-sales-summary`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: formData,
+  });
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const details = payload.details || payload.raw || payload.message || "";
+    const compactDetails = String(details).replace(/\s+/g, " ").trim().slice(0, 260);
+    const errorMessage = payload.error || `Edge function returned HTTP ${response.status}`;
+    throw new Error(compactDetails ? `${errorMessage}: ${compactDetails}` : errorMessage);
+  }
+
+  return payload;
+}
+
+async function invokeManualInstantParser(formData) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-manual-instant`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -2128,6 +2398,21 @@ async function uploadScanPhoto(file, targetDate) {
   return { url: data?.publicUrl || "", error: "" };
 }
 
+async function uploadScanPhotos(files, targetDate) {
+  const uploads = [];
+  for (const file of files || []) {
+    const upload = await uploadScanPhoto(file, targetDate);
+    uploads.push({
+      name: file?.name || "scan.jpg",
+      size: file?.size || 0,
+      url: upload.url || "",
+      uploadError: upload.error || "",
+      dataUrl: upload.url ? "" : file?.dataUrl || "",
+    });
+  }
+  return uploads;
+}
+
 function currentParsedSalesSummaryFromReview() {
   const parsed = { ...(scanDraft.parsed || {}) };
   elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
@@ -2157,6 +2442,10 @@ async function handleScanFiles(type, fileList) {
   renderScanReview();
   if (type === "sales-summary") {
     parseSalesSummaryScan();
+    return;
+  }
+  if (type === "manual-instant") {
+    parseManualInstantScan();
   }
 }
 
@@ -2169,6 +2458,10 @@ function clearScanReview() {
 }
 
 async function applySalesSummaryScan() {
+  if (scanDraft.type === "manual-instant") {
+    applyManualInstantScan();
+    return;
+  }
   if (scanDraft.type !== "sales-summary" || !scanDraft.parsed) return;
 
   const parsed = currentParsedSalesSummaryFromReview();
@@ -2255,6 +2548,48 @@ async function applySalesSummaryScan() {
     : `Sales Summary saved to ${state.businessDate}.`;
 }
 
+async function applyManualInstantScan() {
+  if (scanDraft.type !== "manual-instant" || !scanDraft.parsed) return;
+  const parsed = normalizeManualInstantParsed(scanDraft.parsed);
+  const parsedTotal = parsedManualInstantTotal(parsed);
+  const autoTotal = calculateInstantSales();
+  const ok = await showAppConfirm({
+    eyebrow: "Submit ticket scan",
+    title: "Apply manual instant sold?",
+    body: `This applies parsed manual instant sold of ${currency.format(parsedTotal)} against auto instant sales of ${currency.format(autoTotal)}.`,
+    confirmText: "Apply manual sold",
+    cancelText: "Keep reviewing",
+  });
+  if (!ok) return;
+
+  applyManualInstantParsedToEntries(parsed);
+
+  if (scanDraft.reviewRecordDate && scanDraft.reviewRecordIndex !== undefined) {
+    const record = state.scanRecords[state.businessDate]?.[scanDraft.reviewRecordIndex];
+    if (record) {
+      record.status = "reviewed";
+      record.reviewedAt = new Date().toISOString();
+      record.reviewedBy = currentUserName();
+      record.parsed = parsed;
+      record.totals = {
+        parsedManualInstant: parsedManualInstantTotal(parsed),
+        instantSales: calculateInstantSales(),
+        difference: parsedManualInstantTotal(parsed) - calculateInstantSales(),
+      };
+    }
+  } else {
+    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: false });
+  }
+
+  persistState();
+  await saveCloudState();
+  scanDraft = { type: "", files: [], parsed: null };
+  elements.manualInstantScanInput.value = "";
+  reconcileVisible = true;
+  render();
+  elements.scanParserStatus.textContent = "Manual instant sold applied.";
+}
+
 function renderInstantMismatch(instantSales, manualInstant) {
   const difference = manualInstant - instantSales;
   const isMismatch = Math.abs(difference) > 0.009;
@@ -2310,7 +2645,7 @@ function renderReconciliationRows() {
           <td>${formatGameValue(game)}</td>
           <td>${tickets}</td>
           <td>${currency.format(autoSales)}</td>
-          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="1" value="${getEntry(game).manualInstantSold}" /></td>
+          <td><input data-reconcile-box="${gameId(game)}" type="number" step="1" value="${getEntry(game).manualInstantSold}" /></td>
           <td>${currency.format(variance)}</td>
         </tr>
       `;
@@ -3602,7 +3937,11 @@ elements.applyScanButton.addEventListener("click", () => {
     applySalesSummaryScan();
     return;
   }
-  elements.scanParserStatus.textContent = "Manual instant parser is not connected yet. No values were applied.";
+  if (scanDraft.type === "manual-instant") {
+    applyManualInstantScan();
+    return;
+  }
+  elements.scanParserStatus.textContent = "No scan is ready to apply.";
 });
 elements.pinEntry.addEventListener("input", (event) => {
   const value = event.target.value.replace(/\D/g, "").slice(0, 4);
