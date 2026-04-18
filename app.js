@@ -1932,6 +1932,7 @@ function renderParsedSalesSummaryRows(parsed) {
 
 function normalizeManualInstantParsed(parsed = {}) {
   const totalsMap = {};
+  const normalizedDate = normalizeParsedReportDate(parsed.reportDate || parsed.date || parsed.businessDate);
   const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
   sourceTotals.forEach((item) => {
     const gameNumber = String(item.gameNumber || "").trim().padStart(4, "0");
@@ -1949,6 +1950,7 @@ function normalizeManualInstantParsed(parsed = {}) {
   }
 
   return {
+    reportDate: normalizedDate,
     lines: Array.isArray(parsed.lines) ? parsed.lines : [],
     totalsByGame: Object.entries(totalsMap).map(([gameNumber, amount]) => ({ gameNumber, amount })),
     duplicatesRemoved: Array.isArray(parsed.duplicatesRemoved) ? parsed.duplicatesRemoved : [],
@@ -1978,17 +1980,21 @@ function parsedManualInstantTotal(parsed = scanDraft.parsed) {
 function renderParsedManualInstantRows(parsed) {
   const normalized = normalizeManualInstantParsed(parsed);
   const rows = manualInstantMatchedRows(normalized);
-  const autoTotal = calculateInstantSales();
+  const targetDate = normalized.reportDate || state.businessDate;
+  const autoTotal = calculateInstantSales(targetDate);
   const parsedTotal = rows.reduce((sum, row) => sum + row.amount, 0);
   const mismatch = parsedTotal - autoTotal;
   const warningRows = [
+    targetDate !== state.businessDate
+      ? `<div class="scan-warning">Ticket history date ${targetDate} differs from selected app date ${state.businessDate}. Submit/apply will save to ${targetDate}.</div>`
+      : "",
     ...normalized.warnings.map((warning) => `<div class="scan-warning">${warning}</div>`),
     ...normalized.unmatchedLines.map((line) => `<div class="scan-warning">Unmatched line page ${line.page || "?"}: ${line.rawText || ""} ${currency.format(normalizeNumber(line.amount))}</div>`),
-  ].join("");
+  ].filter(Boolean).join("");
 
   const matchedRows = rows
     .map(({ game, gameNumber, amount }) => {
-      const autoSales = game ? calculateGameSales(game) : 0;
+      const autoSales = game ? calculateGameSales(game, targetDate) : 0;
       return `
         <label class="scan-review-row parsed editable manual-review-row">
           <span>${gameNumber} ${game?.name || "Unmatched game #"}</span>
@@ -2000,6 +2006,10 @@ function renderParsedManualInstantRows(parsed) {
     .join("");
 
   return `
+    <label class="scan-review-row parsed editable">
+      <span>Ticket history date</span>
+      <input data-scan-field="reportDate" type="text" inputmode="text" value="${targetDate}" placeholder="YYYY-MM-DD" />
+    </label>
     <div class="scan-review-row parsed">
       <span>Manual instant parsed total</span>
       <strong>${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})</strong>
@@ -2234,25 +2244,30 @@ async function parseManualInstantScan() {
 }
 
 async function handleManualInstantParsedResult(parsed) {
+  const targetDate = parsed.reportDate || state.businessDate;
+  if (targetDate !== state.businessDate) {
+    switchDate(targetDate);
+  }
   const parsedTotal = parsedManualInstantTotal(parsed);
-  const autoTotal = calculateInstantSales();
+  const autoTotal = calculateInstantSales(targetDate);
   const isMatch = Math.abs(parsedTotal - autoTotal) < 0.01;
 
   if (isMatch) {
-    applyManualInstantParsedToEntries(parsed);
-    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: true });
+    applyManualInstantParsedToEntries(parsed, targetDate);
+    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: true, targetDate });
     await showAppNotice({
       eyebrow: "Upload complete",
       title: "Complete",
-      body: `Manual instant sold matched auto instant sales at ${currency.format(autoTotal)} and was applied.`,
+      body: `Manual instant sold matched auto instant sales at ${currency.format(autoTotal)} for ${targetDate} and was applied.`,
       confirmText: "OK",
     });
-    clearScanReview();
+    scanDraft.parsed = parsed;
     render();
+    elements.scanParserStatus.textContent = `Matched and saved to ${targetDate}. Manual instant sold is applied.`;
     return;
   }
 
-  const pendingRecord = await saveReviewedManualInstantScan(parsed, "pending-review", { autoApplied: false });
+  const pendingRecord = await saveReviewedManualInstantScan(parsed, "pending-review", { autoApplied: false, targetDate });
   scanDraft.reviewRecordDate = pendingRecord.date;
   scanDraft.reviewRecordIndex = pendingRecord.index;
 
@@ -2278,15 +2293,15 @@ async function handleManualInstantParsedResult(parsed) {
   renderCalendar();
 }
 
-function applyManualInstantParsedToEntries(parsed) {
+function applyManualInstantParsedToEntries(parsed, date = state.businessDate) {
   manualInstantMatchedRows(parsed).forEach(({ game, amount }) => {
     if (!game) return;
-    const entry = getEntry(game);
+    const entry = getEntry(game, date);
     entry.manualInstantSold = amount;
     entry.updatedBy = currentUserName();
     entry.updatedAt = new Date().toISOString();
   });
-  const dayLog = getDayLog();
+  const dayLog = getDayLog(date);
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   state.lastSavedAt = dayLog.savedAt;
@@ -2294,8 +2309,9 @@ function applyManualInstantParsedToEntries(parsed) {
 }
 
 async function saveReviewedManualInstantScan(parsed, status, options = {}) {
-  const photos = await uploadScanPhotos(scanDraft.files || [], state.businessDate);
-  state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
+  const targetDate = options.targetDate || parsed.reportDate || state.businessDate;
+  const photos = await uploadScanPhotos(scanDraft.files || [], targetDate);
+  state.scanRecords[targetDate] = state.scanRecords[targetDate] || [];
   const record = {
     type: "manual-instant",
     status,
@@ -2304,22 +2320,22 @@ async function saveReviewedManualInstantScan(parsed, status, options = {}) {
     reviewedAt: status === "reviewed" ? new Date().toISOString() : "",
     reviewedBy: status === "reviewed" ? currentUserName() : "",
     selectedBusinessDate: state.businessDate,
-    parsedReportDate: state.businessDate,
+    parsedReportDate: targetDate,
     parsed,
     autoApplied: Boolean(options.autoApplied),
     totals: {
       parsedManualInstant: parsedManualInstantTotal(parsed),
-      instantSales: calculateInstantSales(),
-      difference: parsedManualInstantTotal(parsed) - calculateInstantSales(),
+      instantSales: calculateInstantSales(targetDate),
+      difference: parsedManualInstantTotal(parsed) - calculateInstantSales(targetDate),
     },
     photos,
     photo: photos[0] || null,
   };
-  state.scanRecords[state.businessDate].push(record);
-  const index = state.scanRecords[state.businessDate].length - 1;
+  state.scanRecords[targetDate].push(record);
+  const index = state.scanRecords[targetDate].length - 1;
   persistState();
   await saveCloudState();
-  return { date: state.businessDate, index, record };
+  return { date: targetDate, index, record };
 }
 
 async function savePendingSalesSummaryScan(parsed) {
@@ -2605,34 +2621,39 @@ async function applySalesSummaryScan() {
 async function applyManualInstantScan() {
   if (scanDraft.type !== "manual-instant" || !scanDraft.parsed) return;
   const parsed = normalizeManualInstantParsed(scanDraft.parsed);
+  const targetDate = parsed.reportDate || state.businessDate;
+  if (targetDate !== state.businessDate) {
+    switchDate(targetDate);
+  }
   const parsedTotal = parsedManualInstantTotal(parsed);
-  const autoTotal = calculateInstantSales();
+  const autoTotal = calculateInstantSales(targetDate);
   const ok = await showAppConfirm({
     eyebrow: "Submit ticket scan",
     title: "Apply manual instant sold?",
-    body: `This applies parsed manual instant sold of ${currency.format(parsedTotal)} against auto instant sales of ${currency.format(autoTotal)}.`,
+    body: `This applies parsed manual instant sold of ${currency.format(parsedTotal)} against auto instant sales of ${currency.format(autoTotal)} for ${targetDate}.`,
     confirmText: "Apply manual sold",
     cancelText: "Keep reviewing",
   });
   if (!ok) return;
 
-  applyManualInstantParsedToEntries(parsed);
+  applyManualInstantParsedToEntries(parsed, targetDate);
 
   if (scanDraft.reviewRecordDate && scanDraft.reviewRecordIndex !== undefined) {
-    const record = state.scanRecords[state.businessDate]?.[scanDraft.reviewRecordIndex];
+    const record = state.scanRecords[targetDate]?.[scanDraft.reviewRecordIndex];
     if (record) {
       record.status = "reviewed";
       record.reviewedAt = new Date().toISOString();
       record.reviewedBy = currentUserName();
       record.parsed = parsed;
+      record.parsedReportDate = targetDate;
       record.totals = {
         parsedManualInstant: parsedManualInstantTotal(parsed),
-        instantSales: calculateInstantSales(),
-        difference: parsedManualInstantTotal(parsed) - calculateInstantSales(),
+        instantSales: calculateInstantSales(targetDate),
+        difference: parsedManualInstantTotal(parsed) - calculateInstantSales(targetDate),
       };
     }
   } else {
-    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: false });
+    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: false, targetDate });
   }
 
   persistState();
@@ -2641,7 +2662,7 @@ async function applyManualInstantScan() {
   elements.manualInstantScanInput.value = "";
   reconcileVisible = true;
   render();
-  elements.scanParserStatus.textContent = "Manual instant sold applied.";
+  elements.scanParserStatus.textContent = `Manual instant sold applied to ${targetDate}.`;
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
