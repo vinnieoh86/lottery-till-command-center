@@ -245,6 +245,7 @@ const elements = {
   backstockWeeks: document.querySelector("#backstockWeeks"),
   highTicketThreshold: document.querySelector("#highTicketThreshold"),
   orderRows: document.querySelector("#orderRows"),
+  orderInvoiceCard: document.querySelector("#orderInvoiceCard"),
   orderReportRows: document.querySelector("#orderReportRows"),
   extraBooksRows: document.querySelector("#extraBooksRows"),
   saveWeeklyOrderButton: document.querySelector("#saveWeeklyOrderButton"),
@@ -361,6 +362,8 @@ function createDefaultState() {
     orderDc: Object.fromEntries([...dcBoxes].map((box) => [box, true])),
     extraOrders: cloneExtraOrders(),
     savedOrders: [],
+    currentOrderPreview: null,
+    orderPreviewClearDate: "",
     orderSettings: {
       date: todayIso(),
       backstockWeeks: 2.5,
@@ -396,6 +399,8 @@ function normalizeStoredState(parsed = {}) {
     orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
     extraOrders: cloneExtraOrders(parsed.extraOrders || defaultExtraOrders),
     savedOrders: parsed.savedOrders || [],
+    currentOrderPreview: parsed.currentOrderPreview || null,
+    orderPreviewClearDate: parsed.orderPreviewClearDate || "",
     orderSettings: {
       date: parsed.orderSettings?.date || todayIso(),
       backstockWeeks: normalizeNumber(parsed.orderSettings?.backstockWeeks) || 2.5,
@@ -3211,43 +3216,66 @@ function refreshOrderCalculations(orderedGames) {
   renderOrderReport(orderedGames);
 }
 
-function renderOrderReport(orderedGames) {
-  elements.orderReportRows.innerHTML = "";
-  let totalBooksNeeded = 0;
-  const reportItems = [];
+function nextWednesdayIso(fromDate = new Date()) {
+  const date = new Date(fromDate);
+  date.setHours(12, 0, 0, 0);
+  let daysUntilWednesday = (3 - date.getDay() + 7) % 7;
+  if (daysUntilWednesday === 0) daysUntilWednesday = 7;
+  date.setDate(date.getDate() + daysUntilWednesday);
+  return date.toISOString().slice(0, 10);
+}
 
-  orderedGames.forEach((game) => {
-    const recommendation = calculateOrderNeed(game);
-    totalBooksNeeded += recommendation.need;
+function clearExpiredOrderPreview() {
+  if (!state.currentOrderPreview || !state.orderPreviewClearDate) return false;
+  if (todayIso() < state.orderPreviewClearDate) return false;
+  state.currentOrderPreview = null;
+  state.orderPreviewClearDate = "";
+  persistState();
+  if (supabaseClient) saveCloudState();
+  return true;
+}
 
-    if (!recommendation.need) return;
-
-    reportItems.push({
-      box: game.box,
-      value: formatGameValue(game),
-      bookNumber: game.bookNumber || "-",
-      name: game.name || "-",
-      order: recommendation.need,
+function orderSnapshotReportItems(snapshot) {
+  const gameItems = (snapshot?.rows || [])
+    .filter((row) => normalizeNumber(row.need) > 0)
+    .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }))
+    .map((row) => ({
+      box: row.box,
+      value: currency.format(row.value).replace(".00", ""),
+      bookNumber: row.bookNumber || "-",
+      name: row.name || "-",
+      order: row.need,
       className: "",
-    });
-  });
+    }));
 
-  const extraOrdersToReport = state.extraOrders
-    .map((item) => ({ ...item, orderNeeded: Math.max(0, normalizeNumber(item.keepUpTo) - normalizeNumber(item.qty)) }))
-    .filter((item) => item.orderNeeded > 0);
-  extraOrdersToReport.forEach((item) => {
-    reportItems.push({
-      box: "-",
-      value: "SUPPLY",
-      bookNumber: "-",
-      name: item.name,
-      order: `${item.orderNeeded}${item.unit ? ` ${item.unit}` : ""}`,
-      className: "extra-order-report-row",
-    });
-  });
+  const supplyItems = (snapshot?.extraOrders || []).map((item) => ({
+    box: "-",
+    value: "SUPPLY",
+    bookNumber: "-",
+    name: item.name,
+    order: `${normalizeNumber(item.orderNeeded)}${item.unit ? ` ${item.unit}` : ""}`,
+    className: "extra-order-report-row",
+  }));
+
+  return [...gameItems, ...supplyItems];
+}
+
+function renderOrderReport() {
+  elements.orderReportRows.innerHTML = "";
+  clearExpiredOrderPreview();
+  const snapshot = state.currentOrderPreview;
+  elements.orderInvoiceCard.classList.toggle("order-invoice-minimized", !snapshot);
+
+  if (!snapshot) {
+    elements.orderReportRows.innerHTML = `<div class="order-report-empty">Complete order to generate the order invoice. This preview clears automatically every Wednesday.</div>`;
+    return;
+  }
+
+  const reportItems = orderSnapshotReportItems(snapshot);
+  const totalBooksNeeded = (snapshot.rows || []).reduce((sum, row) => sum + normalizeNumber(row.need), 0);
 
   if (!reportItems.length) {
-    elements.orderReportRows.innerHTML = `<div class="order-report-empty">No reorder needs based on current saved sales and QTY.</div>`;
+    elements.orderReportRows.innerHTML = `<div class="order-report-empty">Completed order has no books or supplies needed.</div>`;
   } else {
     const midpoint = Math.ceil(reportItems.length / 2);
     elements.orderReportRows.innerHTML = [reportItems.slice(0, midpoint), reportItems.slice(midpoint)]
@@ -3340,6 +3368,8 @@ async function saveWeeklyOrder() {
 
   const snapshot = buildCurrentOrderSnapshot();
   state.savedOrders = [snapshot, ...(state.savedOrders || [])].slice(0, 12);
+  state.currentOrderPreview = snapshot;
+  state.orderPreviewClearDate = nextWednesdayIso();
   state.orderInventory = emptyOrderInventory();
   state.orderAudit = {};
   state.extraOrders = cloneExtraOrders();
@@ -3377,6 +3407,10 @@ function renderSavedOrders() {
               <span>${order.totalBooks} books</span>
               <small>${order.completedBy || "Unknown"} - ${new Date(order.savedAt).toLocaleString()}</small>
             </summary>
+            <div class="saved-order-actions">
+              <button class="ghost-button" type="button" data-download-order="${order.id}">Download CSV</button>
+              <button type="button" data-print-order="${order.id}">Print sheet</button>
+            </div>
             <table class="saved-order-detail">
               <thead><tr><th>Box</th><th>$</th><th>Game #</th><th>Game</th><th>Stock</th><th>Order</th></tr></thead>
               <tbody>${orderRows || `<tr><td colspan="6">No game books needed.</td></tr>`}${extraRows}</tbody>
@@ -3386,6 +3420,112 @@ function renderSavedOrders() {
       },
     )
     .join("");
+
+  elements.savedOrderRows.querySelectorAll("[data-download-order]").forEach((button) => {
+    button.addEventListener("click", () => downloadOrderSheet(button.dataset.downloadOrder));
+  });
+  elements.savedOrderRows.querySelectorAll("[data-print-order]").forEach((button) => {
+    button.addEventListener("click", () => printOrderSheet(button.dataset.printOrder));
+  });
+}
+
+function findSavedOrder(orderId) {
+  return (state.savedOrders || []).find((order) => order.id === orderId);
+}
+
+function orderRowsForExport(order) {
+  const gameRows = (order?.rows || [])
+    .filter((row) => normalizeNumber(row.need) > 0)
+    .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }))
+    .map((row) => ({
+      box: row.box,
+      value: currency.format(row.value).replace(".00", ""),
+      bookNumber: row.bookNumber || "-",
+      game: row.name || "-",
+      stock: row.stockOnHand ?? row.qty ?? 0,
+      order: row.need,
+    }));
+
+  const supplyRows = (order?.extraOrders || []).map((item) => ({
+    box: "-",
+    value: "SUPPLY",
+    bookNumber: "-",
+    game: item.name,
+    stock: normalizeNumber(item.qty),
+    order: `${normalizeNumber(item.orderNeeded)}${item.unit ? ` ${item.unit}` : ""}`,
+  }));
+
+  return [...gameRows, ...supplyRows];
+}
+
+function csvEscape(value) {
+  const raw = String(value ?? "");
+  return /[",\n]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+}
+
+function downloadOrderSheet(orderId) {
+  const order = findSavedOrder(orderId);
+  if (!order) return;
+  const rows = orderRowsForExport(order);
+  const csvRows = [
+    ["Date", order.date],
+    ["Completed by", order.completedBy || ""],
+    ["Saved at", new Date(order.savedAt).toLocaleString()],
+    [],
+    ["Box", "$", "Game #", "Game", "Stock on hand", "Order"],
+    ...rows.map((row) => [row.box, row.value, row.bookNumber, row.game, row.stock, row.order]),
+  ];
+  const csv = csvRows.map((row) => row.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `lottery-order-${order.date}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function printOrderSheet(orderId) {
+  const order = findSavedOrder(orderId);
+  if (!order) return;
+  const rows = orderRowsForExport(order);
+  const html = `
+    <!doctype html>
+    <html>
+      <head>
+        <title>Lottery Order ${order.date}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+          h1 { margin: 0 0 4px; font-size: 22px; }
+          p { margin: 0 0 16px; color: #444; }
+          table { width: 100%; border-collapse: collapse; font-size: 12px; }
+          th, td { border: 1px solid #999; padding: 6px; text-align: left; }
+          th { background: #e9efe5; }
+          td:last-child { font-weight: 700; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <h1>Lottery Reorder Sheet</h1>
+        <p>${order.date} - Completed by ${order.completedBy || "Unknown"} - ${new Date(order.savedAt).toLocaleString()}</p>
+        <table>
+          <thead><tr><th>Box</th><th>$</th><th>Game #</th><th>Game</th><th>Stock on hand</th><th>Order</th></tr></thead>
+          <tbody>
+            ${
+              rows.length
+                ? rows.map((row) => `<tr><td>${row.box}</td><td>${row.value}</td><td>${row.bookNumber}</td><td>${row.game}</td><td>${row.stock}</td><td>${row.order}</td></tr>`).join("")
+                : `<tr><td colspan="6">No books or supplies needed.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+  const printWindow = window.open("", "_blank", "width=900,height=700");
+  if (!printWindow) return;
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
 }
 
 function render() {

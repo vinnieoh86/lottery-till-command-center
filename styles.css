@@ -1742,6 +1742,15 @@ pre {
   background: #fffdf6;
 }
 
+.order-invoice-card.order-invoice-minimized {
+  padding-bottom: 0.8rem;
+  opacity: 0.84;
+}
+
+.order-invoice-card.order-invoice-minimized .section-heading {
+  margin-bottom: 0.25rem;
+}
+
 .order-invoice-card .section-heading {
   margin-bottom: 0.5rem;
 }
@@ -2117,6 +2126,18 @@ pre {
 .saved-order-detail {
   margin-top: 0.55rem;
   min-width: 0;
+}
+
+.saved-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.saved-order-actions button {
+  padding: 0.48rem 0.65rem;
+  font-size: 0.72rem;
 }
 
 .saved-order-detail th,
