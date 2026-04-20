@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260418-6" />
+    <link rel="stylesheet" href="styles.css?v=20260420-1" />
   </head>
   <body>
     <div class="shell">
@@ -121,6 +121,12 @@
             <div class="section-heading compact">
               <span></span>
             <div class="actions">
+              <div class="game-search-wrap">
+                <button id="gameSearchToggle" class="ghost-button game-search-toggle" type="button" aria-label="Search games">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                <input id="gameSearchInput" class="game-search-input" type="search" placeholder="Game # or name…" autocomplete="off" hidden />
+              </div>
               <span class="lock-note">Inventory fields locked for employee mode</span>
               <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
               <button id="saveDayButton" type="button">Complete day</button>
@@ -141,8 +147,8 @@
                   <th>Yesterday</th>
                   <th>Today ending #</th>
                   <th>Tickets sold</th>
-                  <th>Auto sales</th>
-                  <th>Manual instant sold</th>
+                  <th>Auto sales $</th>
+                  <th>Manual sold $</th>
                   <th>Month tickets</th>
                   <th></th>
                 </tr>
@@ -199,8 +205,8 @@
                   <th>Game</th>
                   <th>$</th>
                   <th>Tickets</th>
-                  <th>Auto sales</th>
-                  <th>Manual printout</th>
+                  <th>Auto sales $</th>
+                  <th>Manual sold $</th>
                   <th>Variance</th>
                 </tr>
               </thead>
@@ -637,19 +643,22 @@
           <span data-static="value" class="pill-value"></span>
         </td>
         <td data-output="previousEnding">0</td>
-        <td><input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" inputmode="numeric" enterkeyhint="next" pattern="[0-9]*" /></td>
+        <td>
+          <span class="cell-audit ending-chip"></span>
+          <input data-field="todayEnding" class="today-ending-input" type="number" min="0" step="1" inputmode="numeric" enterkeyhint="next" pattern="[0-9]*" />
+        </td>
         <td data-output="ticketsSold">0</td>
         <td data-output="sales">$0.00</td>
-        <td><input data-field="manualInstantSold" class="manual-instant-input" type="number" step="1" inputmode="decimal" /></td>
-        <td data-output="runningTickets">0</td>
         <td>
-          <span class="locked-chip ending-chip">End</span>
-          <span class="locked-chip manual-chip">Manual</span>
+          <span class="cell-audit manual-chip"></span>
+          <input data-field="manualInstantSold" class="manual-instant-input" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" />
         </td>
+        <td data-output="runningTickets">0</td>
+        <td></td>
       </tr>
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260418-6"></script>
+    <script src="app.js?v=20260420-1"></script>
   </body>
 </html>

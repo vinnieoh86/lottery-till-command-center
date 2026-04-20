@@ -312,7 +312,9 @@ inventory = state.inventory || inventory;
 let summaryMode = "week";
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
+let monthMatrixSort = { key: "box", direction: "asc" };
 let managerReportRange = "month";
+let gameSearchQuery = "";
 let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
@@ -487,7 +489,7 @@ function currentUserName() {
 }
 
 function formatAuditBadge(name, timestamp) {
-  if (!name) return "Locked";
+  if (!name) return "";
   if (!timestamp) return name;
   return `${name} ${new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
@@ -1048,6 +1050,7 @@ function calculateInstantSales(date = state.businessDate) {
 }
 
 function calculateManualInstantSales(date = state.businessDate) {
+  // manualInstantSold is stored as dollar amount directly
   return inventory.reduce((sum, game) => {
     return sum + normalizeNumber(getEntry(game, date).manualInstantSold);
   }, 0);
@@ -1223,6 +1226,10 @@ function syncActiveDayDraft() {
 
 function isCompletedDay(date = state.businessDate) {
   return Boolean(state.dailyLogs[date]?.completedAt);
+}
+
+function isEndingCompleted(date = state.businessDate) {
+  return Boolean(state.dailyLogs[date]?.endingCompletedAt);
 }
 
 function isTodayDate(date = state.businessDate) {
@@ -1409,10 +1416,40 @@ function pendingScanLabelForDate(date) {
   const pending = pendingScanRecordsForDate(date);
   if (!pending.length) return "";
   const types = new Set(pending.map((record) => record.type));
-  if (types.has("manual-instant") && types.has("sales-summary")) return "Sales + tickets";
-  if (types.has("manual-instant")) return "Tickets";
-  if (types.has("sales-summary")) return "Sales";
+  if (types.has("manual-instant") && types.has("sales-summary")) return "Review totals + manual";
+  if (types.has("manual-instant")) return "Review manual";
+  if (types.has("sales-summary")) return "Review totals";
   return "Review";
+}
+
+function dayAttentionItems(date) {
+  if (isClosedDate(date)) return [];
+  const dayLog = state.dailyLogs[date];
+  if (!dayLog && date !== todayIso()) return [];
+  if (date > todayIso()) return [];
+  const items = [];
+  const entries = dayLog?.entries || {};
+  const endingMissing = inventory.some((game) => {
+    const entry = entries[gameId(game)];
+    return !entry || entry.todayEnding === "" || entry.todayEnding === undefined;
+  });
+  const till = normalizeTill(dayLog?.till || {});
+  const lotteryTotalsMissing = ["grossSales", "onlineCashes", "instantCashes"].some((key) => !normalizeNumber(till[key]));
+  const instantSales = calculateInstantSales(date);
+  const manualInstant = calculateManualInstantSales(date);
+  const manualMissing = instantSales > 0 && manualInstant === 0;
+  const manualMismatch = instantSales > 0 && manualInstant > 0 && Math.abs(manualInstant - instantSales) >= 0.01;
+  const pendingLabel = pendingScanLabelForDate(date);
+
+  if (pendingLabel) items.push({ key: "review", label: pendingLabel, view: pendingLabel.includes("totals") ? "till" : "daily" });
+  if (endingMissing) items.push({ key: "ending", label: "Ending missing", view: "daily" });
+  if (manualMissing || manualMismatch) items.push({ key: "manual", label: manualMissing ? "Manual missing" : "Manual mismatch", view: "daily" });
+  if (lotteryTotalsMissing) items.push({ key: "totals", label: "Totals missing", view: "till" });
+  return items;
+}
+
+function primaryAttentionView(date) {
+  return dayAttentionItems(date)[0]?.view || "daily";
 }
 
 function renderCalendar() {
@@ -1451,19 +1488,21 @@ function renderCalendar() {
     if (isoDate === state.businessDate) card.classList.add("active");
     if (dayLog?.savedAt) card.classList.add("saved");
     if (dayLog?.completedAt) card.classList.add("completed");
-    if (isAdminRole() && pendingScanRecordsForDate(isoDate).length) card.classList.add("needs-review");
-    const status = dayLog?.completedAt ? "<small>Done</small>" : dayLog?.savedAt ? "<small>Draft</small>" : "";
-    const reviewLabel = pendingScanLabelForDate(isoDate);
-    const reviewBadge =
-      isAdminRole() && reviewLabel
-        ? `<b class="review-alert">${reviewLabel}</b>`
-        : "";
+    const attentionItems = isAdminRole() ? dayAttentionItems(isoDate) : [];
+    if (attentionItems.length) card.classList.add("needs-review");
+    const attentionBadges = attentionItems
+      .slice(0, 2)
+      .map((item) => `<b class="review-alert">${item.label}</b>`)
+      .join("");
     const varianceBadge =
       isAdminRole() && dayLog?.savedAt
         ? `<em class="day-variance ${getSavedDayTotals(isoDate).variance < 0 ? "negative" : "positive"}">${getSavedDayTotals(isoDate).variance >= 0 ? "+" : ""}${currency.format(getSavedDayTotals(isoDate).variance)}</em>`
         : "";
-    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${status}${reviewBadge}${varianceBadge}`;
-    card.addEventListener("click", () => switchDate(isoDate));
+    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${attentionBadges}${varianceBadge}`;
+    card.addEventListener("click", () => {
+      switchDate(isoDate);
+      setActiveView(primaryAttentionView(isoDate));
+    });
     elements.calendarDays.appendChild(card);
   }
 }
@@ -1531,6 +1570,14 @@ function renderGames() {
   elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
 
   inventory.forEach((game, rowIndex) => {
+    // Search filter
+    if (gameSearchQuery) {
+      const q = gameSearchQuery.toLowerCase();
+      const matchName = (game.name || "").toLowerCase().includes(q);
+      const matchBook = (game.bookNumber || "").includes(q);
+      const matchBox = String(game.box).toLowerCase().includes(q);
+      if (!matchName && !matchBook && !matchBox) return;
+    }
     const entry = getEntry(game);
     const row = elements.gameRowTemplate.content.firstElementChild.cloneNode(true);
     const id = gameId(game);
@@ -1538,6 +1585,7 @@ function renderGames() {
     row.draggable = inventoryEditMode;
     row.dataset.inventoryId = id;
     row.classList.toggle("inventory-editing-row", inventoryEditMode);
+    // Note: dc-row class intentionally NOT applied to daily entry rows (no red highlights in daily view)
     row.querySelectorAll("[data-static]").forEach((field) => {
       const key = field.dataset.static;
       if (inventoryEditMode && ["bookNumber", "name", "value"].includes(key)) {
@@ -1559,19 +1607,21 @@ function renderGames() {
         field.textContent = key === "value" ? formatGameValue(game) : game[key] || "-";
       }
     });
-    row.classList.toggle("dc-row", Boolean(state.orderDc[id]));
+    // dc-row NOT toggled here — no red highlights in daily entry view
 
     row.querySelector("[data-output='previousEnding']").textContent = getPreviousEnding(game);
     row.querySelector("[data-field='todayEnding']").value = entry.todayEnding;
-    row.querySelector("[data-field='manualInstantSold']").value = entry.manualInstantSold;
+    // manualInstantSold stored as $$$ — show as decimal value
+    const manualRaw = entry.manualInstantSold;
+    row.querySelector("[data-field='manualInstantSold']").value = manualRaw !== "" && manualRaw !== undefined ? normalizeNumber(manualRaw).toFixed(2) : "";
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
     const endingChip = row.querySelector(".ending-chip");
     if (endingChip) {
-      const endingBy = entry.todayEndingUpdatedBy || entry.updatedBy || entry.completedBy || "";
-      const endingAt = entry.todayEndingUpdatedAt || entry.updatedAt || entry.completedAt || "";
-      endingChip.textContent = formatAuditBadge(endingBy, endingAt) || "End";
+      const endingBy = entry.todayEndingUpdatedBy || entry.updatedBy || entry.endingCompletedBy || entry.completedBy || "";
+      const endingAt = entry.todayEndingUpdatedAt || entry.updatedAt || entry.endingCompletedAt || entry.completedAt || "";
+      endingChip.textContent = formatAuditBadge(endingBy, endingAt);
       endingChip.title = endingAt ? `Ending updated ${new Date(endingAt).toLocaleString()} by ${endingBy || "unknown"}` : "Ending not updated yet";
       endingChip.classList.toggle("edited-chip", Boolean(endingBy));
     }
@@ -1579,18 +1629,18 @@ function renderGames() {
     if (manualChip) {
       const manualBy = entry.manualInstantUpdatedBy || "";
       const manualAt = entry.manualInstantUpdatedAt || "";
-      manualChip.textContent = formatAuditBadge(manualBy, manualAt) || "Manual";
+      manualChip.textContent = formatAuditBadge(manualBy, manualAt);
       manualChip.title = manualAt ? `Manual sold updated ${new Date(manualAt).toLocaleString()} by ${manualBy || "unknown"}` : "Manual sold not updated yet";
       manualChip.classList.toggle("edited-chip", Boolean(manualBy));
     }
     const manualValue = normalizeNumber(entry.manualInstantSold);
     const autoValue = calculateGameSales(game);
     const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
-    row.classList.toggle("manual-mismatch-row", hasManual && Math.abs(manualValue - autoValue) >= 0.01);
 
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
         isLocked ||
+        (isUserRole() && field.dataset.field === "todayEnding" && isEndingCompleted()) ||
         (isUserRole() && field.dataset.field !== "todayEnding") ||
         (isUserRole() && !isTodayDate());
       field.addEventListener("input", (event) => {
@@ -2027,7 +2077,7 @@ function renderParsedManualInstantRows(parsed) {
     </label>
     <div class="scan-review-row parsed">
       <span>Manual instant parsed total</span>
-      <strong>${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})</strong>
+      <strong data-manual-review-total>${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})</strong>
     </div>
     ${
       normalized.duplicatesRemoved.length
@@ -2102,9 +2152,32 @@ function renderScanReview() {
       const target = normalized.totalsByGame.find((item) => item.gameNumber === gameNumber);
       if (target) target.amount = normalizeNumber(event.target.value);
       scanDraft.parsed = normalized;
+      const targetDate = normalized.reportDate || state.businessDate;
+      const parsedTotal = parsedManualInstantTotal(normalized);
+      const autoTotal = calculateInstantSales(targetDate);
+      const mismatch = parsedTotal - autoTotal;
+      const summary = elements.scanReviewRows.querySelector("[data-manual-review-total]");
+      if (summary) {
+        summary.textContent = `${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})`;
+      }
+      const row = event.target.closest(".manual-review-row");
+      const game = inventory.find((candidate) => String(candidate.bookNumber || "").padStart(4, "0") === gameNumber);
+      const autoSales = game ? calculateGameSales(game, targetDate) : 0;
+      const isMismatch = game && Math.abs(normalizeNumber(event.target.value) - autoSales) >= 0.01;
+      row?.classList.toggle("scan-row-mismatch", Boolean(isMismatch));
+      row?.classList.toggle("scan-row-match", !isMismatch);
     });
     input.addEventListener("change", (event) => {
       event.target.value = formatDecimalInput(event.target.value);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const mismatchInputs = Array.from(elements.scanReviewRows.querySelectorAll(".scan-row-mismatch [data-manual-game]"));
+      const currentIndex = mismatchInputs.indexOf(event.target);
+      const nextInput = mismatchInputs[currentIndex + 1] || Array.from(elements.scanReviewRows.querySelectorAll("[data-manual-game]"))[Array.from(elements.scanReviewRows.querySelectorAll("[data-manual-game]")).indexOf(event.target) + 1];
+      nextInput?.focus();
+      nextInput?.select?.();
     });
   });
 
@@ -2696,9 +2769,15 @@ async function applyManualInstantScan() {
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
+  // Only flag a mismatch after manual instant has actually been entered
+  const anyManualEntered = inventory.some((game) => {
+    const v = getEntry(game).manualInstantSold;
+    return v !== "" && v !== undefined && v !== null;
+  });
+
   const difference = manualInstant - instantSales;
-  const isMismatch = Math.abs(difference) > 0.009;
-  const isMatch = !isMismatch;
+  const isMismatch = anyManualEntered && Math.abs(difference) > 0.009;
+  const isMatch = anyManualEntered && !isMismatch;
 
   elements.instantMismatchAlert.hidden = !isMismatch;
   elements.instantSalesCard.classList.toggle("metric-error", isMismatch);
@@ -2724,14 +2803,16 @@ function renderReconciliationRows() {
     .map((game) => {
       const tickets = calculateTicketsSold(game);
       const autoSales = calculateGameSales(game);
+      // manualInstantSold is now stored as $$$ directly
+      const manual = normalizeNumber(getEntry(game).manualInstantSold);
       return {
         game,
         tickets,
         autoSales,
-        manual: normalizeNumber(getEntry(game).manualInstantSold),
+        manual,
       };
     })
-    .filter((row) => row.autoSales > 0)
+    .filter((row) => row.autoSales > 0 || row.manual > 0)
     .sort((a, b) => String(a.game.bookNumber || "").localeCompare(String(b.game.bookNumber || ""), undefined, { numeric: true }));
 
   if (!rows.length) {
@@ -2742,16 +2823,19 @@ function renderReconciliationRows() {
   elements.reconcileRows.innerHTML = rows
     .map(({ game, tickets, autoSales, manual }) => {
       const variance = manual - autoSales;
+      // Only highlight red if manual has been entered AND there's a mismatch
+      const hasManualEntry = getEntry(game).manualInstantSold !== "" && getEntry(game).manualInstantSold !== undefined;
+      const isMismatch = hasManualEntry && Math.abs(variance) > 0.009;
       return `
-        <tr class="${Math.abs(variance) > 0.009 ? "reconcile-mismatch" : "reconcile-match"}">
+        <tr class="${isMismatch ? "reconcile-mismatch" : "reconcile-match"}">
           <td>${game.bookNumber || "-"}</td>
           <td>${game.box}</td>
           <td>${game.name || "-"}</td>
           <td>${formatGameValue(game)}</td>
           <td>${tickets}</td>
           <td>${currency.format(autoSales)}</td>
-          <td><input data-reconcile-box="${gameId(game)}" type="number" step="1" value="${getEntry(game).manualInstantSold}" /></td>
-          <td>${currency.format(variance)}</td>
+          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" value="${getEntry(game).manualInstantSold !== "" ? normalizeNumber(getEntry(game).manualInstantSold).toFixed(2) : ""}" /></td>
+          <td class="${isMismatch ? "" : (hasManualEntry ? "reconcile-ok-cell" : "")}">${hasManualEntry ? currency.format(variance) : "-"}</td>
         </tr>
       `;
     })
@@ -2804,17 +2888,20 @@ function updateEntry(game, key, value, row) {
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
   const endingChip = row.querySelector(".ending-chip");
   if (endingChip) {
-    endingChip.textContent = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt) || "End";
+    endingChip.textContent = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt);
     endingChip.classList.toggle("edited-chip", Boolean(entry.todayEndingUpdatedBy || entry.updatedBy));
   }
   const manualChip = row.querySelector(".manual-chip");
   if (manualChip) {
-    manualChip.textContent = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt) || "Manual";
+    manualChip.textContent = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt);
     manualChip.classList.toggle("edited-chip", Boolean(entry.manualInstantUpdatedBy));
   }
 
   persistIfLiveDate();
   renderTotals();
+  if (changed && key === "todayEnding") {
+    autoCompleteEndingDayIfReady();
+  }
 }
 
 function handleEntryKeydown(event, row, fieldName) {
@@ -2894,6 +2981,39 @@ function saveDay() {
   elements.syncStatus.textContent = "Day completed and locked";
   persistState();
   render();
+}
+
+function allEndingCountsEntered(date = state.businessDate) {
+  if (isClosedDate(date)) return false;
+  const entries = state.dailyLogs[date]?.entries || {};
+  return inventory.every((game) => {
+    const entry = entries[gameId(game)];
+    return entry && entry.todayEnding !== "" && entry.todayEnding !== undefined;
+  });
+}
+
+async function autoCompleteEndingDayIfReady() {
+  if (selectedDateIsClosed() || isEndingCompleted() || !allEndingCountsEntered()) return;
+  const dayLog = getDayLog();
+  syncActiveDayDraft();
+  dayLog.totals = buildTotals();
+  dayLog.savedAt = new Date().toISOString();
+  dayLog.endingCompletedAt = dayLog.savedAt;
+  dayLog.endingCompletedBy = currentUserName();
+  Object.values(dayLog.entries || {}).forEach((entry) => {
+    if (entry.todayEnding !== "" && entry.todayEnding !== undefined) {
+      entry.endingCompletedBy = currentUserName();
+      entry.endingCompletedAt = dayLog.savedAt;
+    }
+  });
+  state.lastSavedAt = dayLog.savedAt;
+  elements.syncStatus.textContent = "Ending counts complete and locked";
+  persistState();
+  await saveCloudState();
+  hydrateActiveDay();
+  renderCalendar();
+  renderGames();
+  renderTotals();
 }
 
 function buildMonth() {
@@ -3363,19 +3483,56 @@ function seedApril2026SheetData() {
   persistState();
 }
 
+function compareMonthMatrixRows(a, b, key) {
+  const direction = monthMatrixSort.direction === "asc" ? 1 : -1;
+  let left, right;
+  if (key === "box") { left = String(a.game.box); right = String(b.game.box); }
+  else if (key === "value") { left = normalizeNumber(a.game.value); right = normalizeNumber(b.game.value); }
+  else if (key === "bookNumber") { left = String(a.game.bookNumber || ""); right = String(b.game.bookNumber || ""); }
+  else if (key === "name") { left = String(a.game.name || ""); right = String(b.game.name || ""); }
+  else { left = String(a.game.box); right = String(b.game.box); }
+  if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
+  return String(left).localeCompare(String(right), undefined, { numeric: true }) * direction;
+}
+
 function renderMonthMatrix() {
   const dates = selectedMonthDates();
-  const visibleGames = inventory
+
+  // Build game data with totals first so we can sort
+  const gameData = inventory
     .filter((game) => game.value !== "")
     .filter((game) => summaryValueFilter === "all" || String(game.value) === summaryValueFilter)
-    .sort((a, b) => normalizeNumber(a.value) - normalizeNumber(b.value) || String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
+    .map((game) => {
+      let monthlyTickets = 0;
+      let monthlySales = 0;
+      const dayCells = dates.map((date) => {
+        if (isClosedDate(date)) return `<td class="closed-matrix-day"></td>`;
+        const entry = state.dailyLogs[date]?.entries[gameId(game)];
+        const ending = entry?.todayEnding ?? "";
+        const tickets = calculateTicketsSoldFromSavedEntry(game, date);
+        const sales = tickets * normalizeNumber(game.value);
+        monthlyTickets += tickets;
+        monthlySales += sales;
+        if (ending === "") return "<td>-</td>";
+        return `<td><span class="matrix-ending">${ending}</span><span class="matrix-sales">${Math.round(sales)}</span></td>`;
+      });
+      return { game, dayCells, monthlyTickets, monthlySales };
+    });
+
+  // Sort by monthMatrixSort
+  gameData.sort((a, b) => compareMonthMatrixRows(a, b, monthMatrixSort.key));
+
+  const sortArrow = (key) => {
+    if (monthMatrixSort.key !== key) return "";
+    return monthMatrixSort.direction === "asc" ? " ▲" : " ▼";
+  };
 
   elements.monthMatrixHead.innerHTML = `
     <tr>
-      <th>Box</th>
-      <th>Value</th>
-      <th>Book #</th>
-      <th>Game</th>
+      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="box">Box${sortArrow("box")}</button></th>
+      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="value">$${sortArrow("value")}</button></th>
+      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="bookNumber">Book #${sortArrow("bookNumber")}</button></th>
+      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="name">Game${sortArrow("name")}</button></th>
       ${dates
         .map((date) => {
           const day = new Date(`${date}T12:00:00`).getDate();
@@ -3387,46 +3544,28 @@ function renderMonthMatrix() {
       <th class="month-total-col">Books</th>
     </tr>
   `;
+
+  // Attach sort listeners
+  elements.monthMatrixHead.querySelectorAll("[data-matrix-sort]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.matrixSort;
+      const direction = monthMatrixSort.key === key && monthMatrixSort.direction === "asc" ? "desc" : "asc";
+      monthMatrixSort = { key, direction };
+      renderMonthMatrix();
+    });
+  });
+
   elements.monthMatrixRows.innerHTML = "";
 
-  let currentValue = null;
-
-  visibleGames.forEach((game) => {
-    if (currentValue !== game.value) {
-      currentValue = game.value;
-      const groupRow = document.createElement("tr");
-      groupRow.className = "matrix-group-row";
-      groupRow.innerHTML = `<td colspan="${dates.length + 7}">${formatGameValue(game)} games</td>`;
-      elements.monthMatrixRows.appendChild(groupRow);
-    }
-
-    let monthlyTickets = 0;
-    let monthlySales = 0;
-    const dayCells = dates
-      .map((date) => {
-        if (isClosedDate(date)) return `<td class="closed-matrix-day"></td>`;
-
-        const entry = state.dailyLogs[date]?.entries[gameId(game)];
-        const ending = entry?.todayEnding ?? "";
-        const tickets = calculateTicketsSoldFromSavedEntry(game, date);
-        const sales = tickets * normalizeNumber(game.value);
-        monthlyTickets += tickets;
-        monthlySales += sales;
-
-        if (ending === "") return "<td>-</td>";
-        return `<td><span class="matrix-ending">${ending}</span><span class="matrix-sales">${Math.round(sales)}</span></td>`;
-      })
-      .join("");
-
+  gameData.forEach(({ game, dayCells, monthlyTickets, monthlySales }) => {
     const row = document.createElement("tr");
     row.className = valueClass(game.value);
-    row.classList.toggle("dc-row", Boolean(state.orderDc[gameId(game)]));
     row.innerHTML = `
       <td>${game.box}</td>
       <td>${formatGameValue(game)}</td>
       <td>${game.bookNumber || "-"}</td>
       <td>${game.name || "-"}</td>
-      ${dayCells}
+      ${dayCells.join("")}
       <td>${monthlyTickets}</td>
       <td>${currency.format(monthlySales)}</td>
       <td>${calculateBooksSold(game, monthlyTickets).toFixed(2)}</td>
@@ -3749,7 +3888,7 @@ function renderOrderReport() {
 
 function buildCurrentOrderSnapshot() {
   const rows = inventory
-    .filter((game) => game.value !== "")
+    .filter((game) => game.value !== "" && !state.orderDc[gameId(game)])
     .map((game) => {
       const recommendation = calculateOrderNeed(game);
       return {
@@ -3757,7 +3896,7 @@ function buildCurrentOrderSnapshot() {
         value: game.value,
         bookNumber: game.bookNumber,
         name: game.name,
-        dc: Boolean(state.orderDc[gameId(game)]),
+        dc: false,
         qty: normalizeNumber(state.orderInventory[gameId(game)]),
         stockOnHand: normalizeNumber(state.orderInventory[gameId(game)]),
         need: recommendation.need,
@@ -3785,16 +3924,18 @@ function buildCurrentOrderSnapshot() {
 }
 
 async function saveWeeklyOrder() {
+  const snapshot = buildCurrentOrderSnapshot();
+  const totalBooks = snapshot.rows.reduce((sum, r) => sum + r.need, 0);
   const ok = await showAppConfirm({
     eyebrow: "Complete order",
-    title: "Save this order and clear QTY?",
-    body: "This records the order for admin reports, then resets scratch-off and supply QTY values to 0 for the next order.",
+    title: "Complete & save this order?",
+    body: `${totalBooks} book${totalBooks === 1 ? "" : "s"} to order across ${snapshot.rows.filter(r => r.need > 0).length} game${snapshot.rows.filter(r => r.need > 0).length === 1 ? "" : "s"}. Order will be saved to completed records and QTY cleared for next week.`,
     confirmText: "Complete order",
     cancelText: "Keep editing",
   });
   if (!ok) return;
 
-  const snapshot = buildCurrentOrderSnapshot();
+  // Auto-save directly into completed records in one step
   state.savedOrders = [snapshot, ...(state.savedOrders || [])].slice(0, 12);
   state.currentOrderPreview = snapshot;
   state.orderPreviewClearDate = nextWednesdayIso();
@@ -3804,7 +3945,14 @@ async function saveWeeklyOrder() {
   state.orderSettings.date = todayIso();
   elements.orderDate.value = state.orderSettings.date;
   persistState();
-  elements.syncStatus.textContent = "Order completed and cleared";
+  if (supabaseClient) saveCloudState();
+  elements.syncStatus.textContent = `Order completed by ${currentUserName()} — ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  await showAppNotice({
+    eyebrow: "Order saved",
+    title: "Order completed!",
+    body: `${totalBooks} book${totalBooks === 1 ? "" : "s"} recorded. QTY cleared for next order. Check Completed Order Records below.`,
+    confirmText: "OK",
+  });
   renderOrderSheet();
   renderSavedOrders();
 }
@@ -3988,6 +4136,35 @@ elements.editInventoryButton.addEventListener("click", () => {
 });
 elements.saveDayButton.addEventListener("click", saveDay);
 elements.exportButton.addEventListener("click", exportJson);
+
+// Search toggle
+const gameSearchToggle = document.querySelector("#gameSearchToggle");
+const gameSearchInput = document.querySelector("#gameSearchInput");
+if (gameSearchToggle && gameSearchInput) {
+  gameSearchToggle.addEventListener("click", () => {
+    const isHidden = gameSearchInput.hidden;
+    gameSearchInput.hidden = !isHidden;
+    if (!isHidden) {
+      gameSearchQuery = "";
+      gameSearchInput.value = "";
+      renderGames();
+    } else {
+      gameSearchInput.focus();
+    }
+  });
+  gameSearchInput.addEventListener("input", (event) => {
+    gameSearchQuery = event.target.value.trim();
+    renderGames();
+  });
+  gameSearchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      gameSearchQuery = "";
+      gameSearchInput.value = "";
+      gameSearchInput.hidden = true;
+      renderGames();
+    }
+  });
+}
 elements.orderDate.value = state.orderSettings.date;
 elements.backstockWeeks.value = state.orderSettings.backstockWeeks;
 elements.highTicketThreshold.value = state.orderSettings.highTicketThreshold;
