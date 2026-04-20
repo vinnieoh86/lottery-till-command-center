@@ -937,36 +937,44 @@ function subscribeToRealtimeSync() {
         table: "app_state_snapshots",
         filter: `store_key=eq.${CLOUD_STORE_KEY}`,
       },
-      (payload) => {
-        // Ignore updates we ourselves just triggered
+      async (payload) => {
+        // Ignore if we are mid-apply already
         if (isApplyingCloudState) return;
-        const incomingState = payload.new?.state;
-        if (!incomingState) return;
 
-        // Ignore if we were the device that saved this
-        if (incomingState._deviceId && incomingState._deviceId === DEVICE_ID) return;
+        // Check if this was our own save using the device ID stamped in the payload
+        // NOTE: payload.new.state may be null/truncated if state exceeds 1MB realtime limit
+        // so we treat the event itself as the trigger and always fetch fresh from DB
+        const payloadDeviceId = payload.new?.state?._deviceId;
+        if (payloadDeviceId && payloadDeviceId === DEVICE_ID) return;
 
-        // No change in saved timestamp — nothing meaningful happened
-        if (incomingState.lastSavedAt === state.lastSavedAt) return;
+        // Also check updated_at — if it matches our last save time, it's our own event
+        const incomingUpdatedAt = payload.new?.updated_at;
+        if (incomingUpdatedAt && state.lastSavedAt) {
+          const incomingMs = new Date(incomingUpdatedAt).getTime();
+          const localMs = new Date(state.lastSavedAt).getTime();
+          // Within 3 seconds = almost certainly our own save
+          if (Math.abs(incomingMs - localMs) < 3000) return;
+        }
 
-        // Check if there's a new pending scan review for today
-        const incomingScans = incomingState.scanRecords?.[todayIso()] || [];
-        const localScans = state.scanRecords?.[todayIso()] || [];
-        const newPendingReview = incomingScans.some((record, i) => {
-          return record.status === "pending-review" &&
-            (!localScans[i] || localScans[i].status !== "pending-review");
-        });
+        // Always fetch fresh state from Supabase — never rely on payload.new.state
+        // (payload is capped at 1MB and will be null/partial for large state objects)
+        const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
+        const previousLastSaved = state.lastSavedAt;
 
-        if (newPendingReview && isAdminRole()) {
-          // High-priority: employee uploaded a scan needing admin review
-          // Auto-pull state so the review button works immediately
-          loadCloudState().then(() => {
-            showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
-          });
-        } else {
-          // Regular update — show banner, let admin choose when to sync
-          const savedBy = incomingState.dailyLogs?.[todayIso()]?.completedBy || "another device";
-          showRealtimeBanner(`🔄 Update from ${savedBy} — tap to sync`);
+        await loadCloudState();
+
+        // After loading, check what changed to show the right notification
+        const newScanCount = (state.scanRecords?.[todayIso()] || []).length;
+        const newPendingReview = (state.scanRecords?.[todayIso()] || []).some(
+          (r) => r.status === "pending-review"
+        );
+
+        if (newScanCount > previousScanCount && newPendingReview && isAdminRole()) {
+          showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
+        } else if (state.lastSavedAt !== previousLastSaved) {
+          const savedBy = state.dailyLogs?.[todayIso()]?.completedBy ||
+                          state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
+          showRealtimeBanner(`✓ Synced update from ${savedBy}`);
         }
       },
     )
