@@ -817,12 +817,25 @@ async function loadCloudState() {
     return;
   }
 
-  setSyncStatus("Loading cloud");
-  const { data, error } = await supabaseClient
-    .from("app_state_snapshots")
-    .select("state, updated_at")
-    .eq("store_key", CLOUD_STORE_KEY)
-    .maybeSingle();
+  // Guard: if already applying, don't stack another load
+  if (isApplyingCloudState) {
+    setSyncStatus("Sync already in progress");
+    return;
+  }
+
+  setSyncStatus("Loading cloud…");
+
+  let data, error;
+  try {
+    ({ data, error } = await supabaseClient
+      .from("app_state_snapshots")
+      .select("state, updated_at")
+      .eq("store_key", CLOUD_STORE_KEY)
+      .maybeSingle());
+  } catch (fetchError) {
+    setSyncStatus(`Load error: ${fetchError.message || "Network error"}`);
+    return;
+  }
 
   if (error) {
     setSyncStatus(`Load error: ${error.message}`);
@@ -835,15 +848,21 @@ async function loadCloudState() {
   }
 
   isApplyingCloudState = true;
-  const activeDate = state.businessDate || todayIso();
-  state = normalizeStoredState({ ...data.state, businessDate: activeDate });
-  inventory = state.inventory || inventory;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  hydrateActiveDay();
-  render();
-  setActiveView(activeView);
-  isApplyingCloudState = false;
-  setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
+  try {
+    const activeDate = state.businessDate || todayIso();
+    state = normalizeStoredState({ ...data.state, businessDate: activeDate });
+    inventory = state.inventory || inventory;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    hydrateActiveDay();
+    render();
+    setActiveView(activeView);
+    setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
+  } catch (applyError) {
+    setSyncStatus(`Apply error: ${applyError.message || "Could not apply cloud state"}`);
+  } finally {
+    // Always reset — this was the bug causing "stuck" loading
+    isApplyingCloudState = false;
+  }
 }
 
 async function signInToCloud() {
@@ -2583,14 +2602,18 @@ async function handleScanFiles(type, fileList) {
   if (!files.length) return;
 
   elements.scanReviewPanel.hidden = false;
-  elements.scanReviewTitle.textContent = "Compressing photo...";
+  elements.scanReviewTitle.textContent = `Compressing ${files.length > 1 ? files.length + " photos" : "photo"}...`;
   elements.scanReviewRows.innerHTML = "";
   elements.scanPhotoPreview.innerHTML = "";
-  elements.scanParserStatus.textContent = "Compressing photo...";
+  elements.scanParserStatus.textContent = `Compressing ${files.length > 1 ? files.length + " photos" : "photo"}...`;
 
-  const compressed = [];
-  for (const file of files) {
-    compressed.push(await compressScanImage(file));
+  // Compress all images in parallel — much faster for multi-page manual instant scans
+  let compressed;
+  try {
+    compressed = await Promise.all(files.map((file) => compressScanImage(file)));
+  } catch (err) {
+    elements.scanParserStatus.textContent = `Compression error: ${err.message || "Could not compress image"}`;
+    return;
   }
 
   if (type === "manual-instant" && scanDraft.type === "manual-instant" && !scanDraft.parsed) {
@@ -2652,6 +2675,7 @@ async function applySalesSummaryScan() {
     switchDate(targetDate);
   }
 
+  // Apply parsed values into till state
   const appliedTill = normalizeTill({
     ...state.till,
     grossSales: parsed.grossSales,
@@ -2666,17 +2690,21 @@ async function applySalesSummaryScan() {
   });
   state.till = appliedTill;
 
+  // Write to the day log — always, regardless of photo path
   const dayLog = previousDateDraft?.date === state.businessDate ? previousDateDraft.dayLog : getDayLog();
   dayLog.till = { ...appliedTill };
   dayLog.cashCounts = { ...state.cashCounts };
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   state.dailyLogs[state.businessDate] = cloneJson(dayLog);
+  state.lastSavedAt = dayLog.savedAt;
   previousDateDraft = null;
 
   state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
-  let photoUpload = { url: "", error: "" };
+  let statusMessage = `Sales Summary applied to ${state.businessDate}.`;
+
   if (scanDraft.reviewRecordDate && scanDraft.reviewRecordIndex !== undefined) {
+    // Reviewing a pending scan — update existing record
     const record = state.scanRecords[state.businessDate]?.[scanDraft.reviewRecordIndex];
     if (record) {
       record.status = "reviewed";
@@ -2685,8 +2713,9 @@ async function applySalesSummaryScan() {
       record.parsed = parsed;
       record.parsedReportDate = parsed.reportDate || record.parsedReportDate || "";
     }
-  } else {
-    photoUpload = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
+  } else if (scanDraft.files?.length) {
+    // Fresh scan — upload photo
+    const photoUpload = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
     state.scanRecords[state.businessDate].push({
       type: scanDraft.type,
       status: "reviewed",
@@ -2705,20 +2734,23 @@ async function applySalesSummaryScan() {
         dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
       },
     });
+    if (photoUpload.error) statusMessage = `Sales Summary applied to ${state.businessDate} (photo upload failed: ${photoUpload.error})`;
   }
 
   persistState();
-  await saveCloudState();
+  // Non-blocking cloud save — UI updates immediately
+  saveCloudState().catch((e) => console.warn("Cloud save after scan apply:", e));
+
   (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
   scanDraft = { type: "", files: [], parsed: null };
   elements.salesSummaryScanInput.value = "";
+
+  // Always re-render with newly applied values
   renderCalendar();
   renderTillInputs();
   renderTotals();
   renderScanReview();
-  elements.scanParserStatus.textContent = photoUpload.error
-    ? `Sales Summary saved to ${state.businessDate}, but photo upload failed: ${photoUpload.error}`
-    : `Sales Summary saved to ${state.businessDate}.`;
+  elements.scanParserStatus.textContent = statusMessage;
 }
 
 async function applyManualInstantScan() {
@@ -2760,7 +2792,8 @@ async function applyManualInstantScan() {
   }
 
   persistState();
-  await saveCloudState();
+  // Non-blocking cloud save
+  saveCloudState().catch((e) => console.warn("Cloud save after manual instant apply:", e));
   scanDraft = { type: "", files: [], parsed: null };
   elements.manualInstantScanInput.value = "";
   reconcileVisible = true;
