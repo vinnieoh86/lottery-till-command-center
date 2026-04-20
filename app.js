@@ -870,14 +870,14 @@ async function loadCloudState() {
     state = normalizeStoredState({ ...data.state, businessDate: activeDate });
     inventory = state.inventory || inventory;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    hydrateActiveDay();
-    render();
+    hydrateActiveDay();  // sets state.till from dayLog.till
+    render();            // renders everything including till inputs
+    renderTillInputs();  // force a second pass to guarantee till fields are current
     setActiveView(activeView);
     setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
   } catch (applyError) {
     setSyncStatus(`Apply error: ${applyError.message || "Could not apply cloud state"}`);
   } finally {
-    // Always reset — this was the bug causing "stuck" loading
     isApplyingCloudState = false;
   }
 }
