@@ -793,11 +793,21 @@ function scheduleCloudSave() {
   }, 1200);
 }
 
+let recentlySavedToCloud = false;
+let recentlySavedTimer = null;
+
 async function saveCloudState() {
   if (!supabaseClient) {
     setSyncStatus("Supabase offline");
     return;
   }
+
+  // Mark that WE are about to save — realtime callback will see this and skip
+  recentlySavedToCloud = true;
+  window.clearTimeout(recentlySavedTimer);
+  recentlySavedTimer = window.setTimeout(() => {
+    recentlySavedToCloud = false;
+  }, 5000);
 
   setSyncStatus("Syncing cloud");
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
@@ -811,6 +821,7 @@ async function saveCloudState() {
 
   if (error) {
     setSyncStatus(`Sync error: ${error.message}`);
+    recentlySavedToCloud = false;
     return;
   }
 
@@ -938,26 +949,12 @@ function subscribeToRealtimeSync() {
         filter: `store_key=eq.${CLOUD_STORE_KEY}`,
       },
       async (payload) => {
-        // Ignore if we are mid-apply already
+        // Ignore if we are mid-apply or we just saved ourselves
         if (isApplyingCloudState) return;
-
-        // Check if this was our own save using the device ID stamped in the payload
-        // NOTE: payload.new.state may be null/truncated if state exceeds 1MB realtime limit
-        // so we treat the event itself as the trigger and always fetch fresh from DB
-        const payloadDeviceId = payload.new?.state?._deviceId;
-        if (payloadDeviceId && payloadDeviceId === DEVICE_ID) return;
-
-        // Also check updated_at — if it matches our last save time, it's our own event
-        const incomingUpdatedAt = payload.new?.updated_at;
-        if (incomingUpdatedAt && state.lastSavedAt) {
-          const incomingMs = new Date(incomingUpdatedAt).getTime();
-          const localMs = new Date(state.lastSavedAt).getTime();
-          // Within 3 seconds = almost certainly our own save
-          if (Math.abs(incomingMs - localMs) < 3000) return;
-        }
+        if (recentlySavedToCloud) return;
 
         // Always fetch fresh state from Supabase — never rely on payload.new.state
-        // (payload is capped at 1MB and will be null/partial for large state objects)
+        // (realtime payload is capped at 1MB and may be null for large state objects)
         const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
         const previousLastSaved = state.lastSavedAt;
 
@@ -974,7 +971,7 @@ function subscribeToRealtimeSync() {
         } else if (state.lastSavedAt !== previousLastSaved) {
           const savedBy = state.dailyLogs?.[todayIso()]?.completedBy ||
                           state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
-          showRealtimeBanner(`✓ Synced update from ${savedBy}`);
+          showRealtimeBanner(`✓ Synced from ${savedBy}`);
         }
       },
     )
