@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260420-2" />
+    <link rel="stylesheet" href="styles.css?v=20260420-5" />
   </head>
   <body>
     <div class="shell">
@@ -56,8 +56,8 @@
           <input id="authEmail" type="email" placeholder="email" autocomplete="email" hidden />
           <input id="authPassword" class="pin-setting-input" type="text" placeholder="password" autocomplete="off" data-lpignore="true" data-form-type="other" hidden />
           <div id="authActions" class="auth-actions" hidden>
-            <button id="authSignInButton" type="button">Sign in</button>
-            <button id="authSignUpButton" class="ghost-dark-button" type="button">Create</button>
+            <button id="authSignInButton" type="button" hidden>Sign in</button>
+            <button id="authSignUpButton" class="ghost-dark-button" type="button" hidden>Create</button>
           </div>
           <div class="cloud-actions">
             <button id="cloudSyncButton" class="ghost-dark-button" type="button">Sync now</button>
@@ -659,6 +659,6 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260420-2"></script>
+    <script src="app.js?v=20260420-5"></script>
   </body>
 </html>

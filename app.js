@@ -447,6 +447,7 @@ function getSerializableState() {
   return {
     ...state,
     inventory,
+    _deviceId: DEVICE_ID,
   };
 }
 
@@ -464,16 +465,21 @@ function renderAuthState() {
   elements.authPassword.hidden = true;
   elements.authActions.hidden = true;
   elements.authSignOutButton.hidden = true;
-  elements.cloudSyncButton.disabled = !online;
-  elements.mobileSyncButton.disabled = !online;
+  // Sign in/Create are not used — app syncs via anon key automatically
+  elements.authSignInButton.hidden = true;
+  elements.authSignUpButton.hidden = true;
   elements.authSignInButton.disabled = true;
   elements.authSignUpButton.disabled = true;
+  elements.cloudSyncButton.disabled = !online;
+  elements.mobileSyncButton.disabled = !online;
 
+  // Only set status if realtime isn't already active — don't overwrite "Live sync active ✓"
   if (!supabaseClient) {
     setSyncStatus("Local draft");
-  } else {
+  } else if (!realtimeChannel) {
     setSyncStatus("Auto sync ready");
   }
+  // If realtimeChannel exists, leave the current status alone
 }
 
 function isAdminRole() {
@@ -878,10 +884,118 @@ async function signOutOfCloud() {
   renderAuthState();
 }
 
+const DEVICE_ID = `device-${Math.random().toString(36).slice(2, 9)}`;
+let realtimeChannel = null;
+let realtimeNotifyBanner = null;
+let lastSaveDeviceId = "";
+
+function showRealtimeBanner(message, isReview = false) {
+  // Remove any existing banner
+  if (realtimeNotifyBanner) realtimeNotifyBanner.remove();
+
+  const banner = document.createElement("div");
+  banner.className = `realtime-banner${isReview ? " realtime-banner-review" : ""}`;
+  banner.innerHTML = `
+    <span>${message}</span>
+    <button type="button" class="realtime-banner-sync">Sync now</button>
+    <button type="button" class="realtime-banner-dismiss" aria-label="Dismiss">✕</button>
+  `;
+  document.body.appendChild(banner);
+  realtimeNotifyBanner = banner;
+
+  banner.querySelector(".realtime-banner-sync").addEventListener("click", async () => {
+    banner.remove();
+    realtimeNotifyBanner = null;
+    await loadCloudState();
+  });
+  banner.querySelector(".realtime-banner-dismiss").addEventListener("click", () => {
+    banner.remove();
+    realtimeNotifyBanner = null;
+  });
+
+  // Auto-dismiss non-review banners after 8 seconds
+  if (!isReview) {
+    window.setTimeout(() => {
+      if (realtimeNotifyBanner === banner) {
+        banner.remove();
+        realtimeNotifyBanner = null;
+      }
+    }, 8000);
+  }
+}
+
+function subscribeToRealtimeSync() {
+  if (!supabaseClient || realtimeChannel) return;
+
+  realtimeChannel = supabaseClient
+    .channel("app-state-changes")
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "app_state_snapshots",
+        filter: `store_key=eq.${CLOUD_STORE_KEY}`,
+      },
+      (payload) => {
+        // Ignore updates we ourselves just triggered
+        if (isApplyingCloudState) return;
+        const incomingState = payload.new?.state;
+        if (!incomingState) return;
+
+        // Ignore if we were the device that saved this
+        if (incomingState._deviceId && incomingState._deviceId === DEVICE_ID) return;
+
+        // No change in saved timestamp — nothing meaningful happened
+        if (incomingState.lastSavedAt === state.lastSavedAt) return;
+
+        // Check if there's a new pending scan review for today
+        const incomingScans = incomingState.scanRecords?.[todayIso()] || [];
+        const localScans = state.scanRecords?.[todayIso()] || [];
+        const newPendingReview = incomingScans.some((record, i) => {
+          return record.status === "pending-review" &&
+            (!localScans[i] || localScans[i].status !== "pending-review");
+        });
+
+        if (newPendingReview && isAdminRole()) {
+          // High-priority: employee uploaded a scan needing admin review
+          // Auto-pull state so the review button works immediately
+          loadCloudState().then(() => {
+            showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
+          });
+        } else {
+          // Regular update — show banner, let admin choose when to sync
+          const savedBy = incomingState.dailyLogs?.[todayIso()]?.completedBy || "another device";
+          showRealtimeBanner(`🔄 Update from ${savedBy} — tap to sync`);
+        }
+      },
+    )
+    .subscribe((status, err) => {
+      if (status === "SUBSCRIBED") {
+        setSyncStatus("Live sync active ✓");
+      } else if (status === "CHANNEL_ERROR") {
+        const msg = err?.message || "";
+        if (msg.includes("replication") || msg.includes("publication")) {
+          setSyncStatus("⚠ Enable Realtime on app_state_snapshots in Supabase");
+        } else {
+          setSyncStatus("Live sync error — tap Sync now");
+        }
+        realtimeChannel = null;
+        window.setTimeout(subscribeToRealtimeSync, 15000);
+      } else if (status === "TIMED_OUT") {
+        setSyncStatus("Live sync timed out — retrying…");
+        realtimeChannel = null;
+        window.setTimeout(subscribeToRealtimeSync, 15000);
+      }
+    });
+}
+
 async function initCloudSync() {
   renderAuthState();
   if (!supabaseClient) return;
   await loadCloudState();
+  // Start realtime push subscription after initial load
+  subscribeToRealtimeSync();
 }
 
 function normalizeNumber(value) {
@@ -2013,12 +2127,57 @@ function renderParsedSalesSummaryRows(parsed) {
   return `${mismatch}${warnings}${rows}`;
 }
 
+// All Ohio Lottery scratch-off game numbers start with 10xx or 07xx.
+// Build a lookup set from current inventory for fast matching.
+function buildInventoryGameNumberSet() {
+  const set = new Set();
+  inventory.forEach((game) => {
+    if (game.bookNumber) set.add(String(game.bookNumber).padStart(4, "0"));
+  });
+  return set;
+}
+
+// Attempt to fix a truncated game number from OCR.
+// e.g. "86" → "1086", "79" → "1079", "23" → "1023"
+// Strategy: try prepending "10", then "07", then padStart to 4 digits.
+function fixTruncatedGameNumber(raw) {
+  const digits = String(raw || "").replace(/\D/g, "").trim();
+  if (!digits) return null;
+
+  const inventoryNumbers = buildInventoryGameNumberSet();
+
+  // Already a full 4-digit match
+  const padded = digits.padStart(4, "0");
+  if (inventoryNumbers.has(padded)) return padded;
+
+  // Try prepending "10" (most common Ohio prefix)
+  if (digits.length <= 2) {
+    const with10 = "10" + digits.padStart(2, "0");
+    if (inventoryNumbers.has(with10)) return with10;
+    // Try "07" prefix (e.g. 0762)
+    const with07 = "07" + digits.padStart(2, "0");
+    if (inventoryNumbers.has(with07)) return with07;
+  }
+
+  // Try prepending "10" for 3-digit numbers like "086" → "1086"
+  if (digits.length === 3) {
+    const with1 = "1" + digits;
+    if (inventoryNumbers.has(with1)) return with1;
+    const with0 = "0" + digits;
+    if (inventoryNumbers.has(with0)) return with0;
+  }
+
+  // Fall back to padded original
+  return padded;
+}
+
 function normalizeManualInstantParsed(parsed = {}) {
   const totalsMap = {};
   const normalizedDate = normalizeParsedReportDate(parsed.reportDate || parsed.date || parsed.businessDate);
   const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
   sourceTotals.forEach((item) => {
-    const gameNumber = String(item.gameNumber || "").trim().padStart(4, "0");
+    const raw = String(item.gameNumber || "").trim();
+    const gameNumber = fixTruncatedGameNumber(raw);
     if (!gameNumber || gameNumber === "0000") return;
     totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(item.amount);
   });
@@ -2026,7 +2185,8 @@ function normalizeManualInstantParsed(parsed = {}) {
   if (!sourceTotals.length && Array.isArray(parsed.lines)) {
     parsed.lines.forEach((line) => {
       if (line.duplicate) return;
-      const gameNumber = String(line.gameNumber || "").trim().padStart(4, "0");
+      const raw = String(line.gameNumber || "").trim();
+      const gameNumber = fixTruncatedGameNumber(raw);
       if (!gameNumber || gameNumber === "0000") return;
       totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(line.amount);
     });
