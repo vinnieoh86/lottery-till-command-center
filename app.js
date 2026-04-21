@@ -319,6 +319,8 @@ let realtimeChannel = null;
 let realtimeNotifyBanner = null;
 let cloudPollTimer = null;
 let lastLoadedCloudUpdatedAt = "";
+let isSavingCloudState = false;
+let pendingCloudSaveRequested = false;
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
 let managerReportRange = "month";
@@ -803,7 +805,7 @@ function scheduleCloudSave() {
 function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
-    if (document.hidden || isApplyingCloudState || !supabaseClient) return;
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || !supabaseClient) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 2000);
 }
@@ -821,25 +823,39 @@ async function saveCloudState() {
     if (!supabaseClient) setSyncStatus("Supabase offline");
     return;
   }
+  if (isSavingCloudState) {
+    pendingCloudSaveRequested = true;
+    return;
+  }
+  isSavingCloudState = true;
+  pendingCloudSaveRequested = false;
   setSyncStatus("Syncing cloud…");
   const saveTimestamp = new Date().toISOString();
   // Store in state so realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
   state._ownSaveTimestamp = saveTimestamp;
-  const { error } = await supabaseClient.from("app_state_snapshots").upsert(
-    {
-      store_key: CLOUD_STORE_KEY,
-      state: { ...getSerializableState(), _ownSaveTimestamp: saveTimestamp },
-      updated_at: saveTimestamp,
-    },
-    { onConflict: "store_key" },
-  );
+  try {
+    const { error } = await supabaseClient.from("app_state_snapshots").upsert(
+      {
+        store_key: CLOUD_STORE_KEY,
+        state: { ...getSerializableState(), _ownSaveTimestamp: saveTimestamp },
+        updated_at: saveTimestamp,
+      },
+      { onConflict: "store_key" },
+    );
 
-  if (error) {
-    setSyncStatus(`Sync error: ${error.message}`);
-    return;
+    if (error) {
+      setSyncStatus(`Sync error: ${error.message}`);
+      return;
+    }
+    lastLoadedCloudUpdatedAt = saveTimestamp;
+    setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
+  } finally {
+    isSavingCloudState = false;
+    if (pendingCloudSaveRequested) {
+      pendingCloudSaveRequested = false;
+      window.setTimeout(() => saveCloudState(), 50);
+    }
   }
-  lastLoadedCloudUpdatedAt = saveTimestamp;
-  setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
 }
 
 async function loadCloudState(options = {}) {
