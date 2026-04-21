@@ -321,6 +321,9 @@ let cloudPollTimer = null;
 let lastLoadedCloudUpdatedAt = "";
 let isSavingCloudState = false;
 let pendingCloudSaveRequested = false;
+let isLoadingCloudState = false;
+let pendingCloudLoadRequested = false;
+let pendingCloudLoadQuiet = true;
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
 let managerReportRange = "month";
@@ -805,7 +808,7 @@ function scheduleCloudSave() {
 function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || !supabaseClient) return;
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 2000);
 }
@@ -864,8 +867,18 @@ async function loadCloudState(options = {}) {
     setSyncStatus("Supabase offline");
     return;
   }
+  if (isLoadingCloudState) {
+    pendingCloudLoadRequested = true;
+    pendingCloudLoadQuiet = pendingCloudLoadQuiet && quietIfUnchanged;
+    return;
+  }
+  isLoadingCloudState = true;
+  pendingCloudLoadRequested = false;
+  pendingCloudLoadQuiet = true;
 
-  setSyncStatus("Loading cloud");
+  if (!quietIfUnchanged) {
+    setSyncStatus("Loading cloud");
+  }
   const { data, error } = await supabaseClient
     .from("app_state_snapshots")
     .select("state, updated_at")
@@ -873,16 +886,36 @@ async function loadCloudState(options = {}) {
     .maybeSingle();
 
   if (error) {
-    setSyncStatus(`Load error: ${error.message}`);
+    const wasCanceled = /cancel/i.test(String(error.message || ""));
+    if (!wasCanceled) {
+      setSyncStatus(`Load error: ${error.message}`);
+    } else if (!quietIfUnchanged) {
+      setSyncStatus("Cloud refresh retrying");
+    }
+    isLoadingCloudState = false;
+    if (pendingCloudLoadRequested) {
+      const rerunQuiet = pendingCloudLoadQuiet;
+      pendingCloudLoadRequested = false;
+      pendingCloudLoadQuiet = true;
+      window.setTimeout(() => loadCloudState({ quietIfUnchanged: rerunQuiet }), 50);
+    }
     return;
   }
 
   if (!data?.state) {
     await saveCloudState();
+    isLoadingCloudState = false;
     return;
   }
 
   if (quietIfUnchanged && data.updated_at && data.updated_at === lastLoadedCloudUpdatedAt) {
+    isLoadingCloudState = false;
+    if (pendingCloudLoadRequested) {
+      const rerunQuiet = pendingCloudLoadQuiet;
+      pendingCloudLoadRequested = false;
+      pendingCloudLoadQuiet = true;
+      window.setTimeout(() => loadCloudState({ quietIfUnchanged: rerunQuiet }), 50);
+    }
     return;
   }
 
@@ -1003,6 +1036,13 @@ async function loadCloudState(options = {}) {
   // The isApplyingCloudState guard in saveCloudState prevents re-entrant calls.
   if (_mergeHadLocalNewer) {
     window.setTimeout(() => saveCloudState(), 500);
+  }
+  isLoadingCloudState = false;
+  if (pendingCloudLoadRequested) {
+    const rerunQuiet = pendingCloudLoadQuiet;
+    pendingCloudLoadRequested = false;
+    pendingCloudLoadQuiet = true;
+    window.setTimeout(() => loadCloudState({ quietIfUnchanged: rerunQuiet }), 50);
   }
 }
 
