@@ -493,9 +493,9 @@ function currentUserName() {
 
 function formatAuditBadge(name, timestamp) {
   if (!name) return "";
-  if (!timestamp) return name;
+  if (!timestamp) return `<span class="chip-time">${name}</span>`;
   const time = new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return `${name} <span class="chip-time">${time}</span>`;
+  return `<span class="chip-time">${name} ${time}</span>`;
 }
 
 function loadSessionAccess() {
@@ -795,7 +795,7 @@ function scheduleCloudSave() {
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
     saveCloudState();
-  }, 1200);
+  }, 600);
 }
 
 async function saveCloudState() {
@@ -3140,6 +3140,17 @@ function updateEntry(game, key, value, row) {
     manualChip.classList.toggle("edited-chip", Boolean(entry.manualInstantUpdatedBy));
   }
 
+  // Fix 4: update red/green mismatch immediately without waiting for renderGames
+  const manualCell = row.querySelector("[data-field='manualInstantSold']")?.closest("td");
+  if (manualCell) {
+    const manualValue = normalizeNumber(entry.manualInstantSold);
+    const autoValue = calculateGameSales(game);
+    const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
+    const isMismatch = hasManual && Math.abs(manualValue - autoValue) > 0.009;
+    manualCell.classList.toggle("manual-mismatch-cell", isMismatch);
+    manualCell.classList.toggle("manual-match-cell", hasManual && !isMismatch);
+  }
+
   persistIfLiveDate();
   renderTotals();
   if (changed && key === "todayEnding") {
@@ -3252,10 +3263,27 @@ async function autoCompleteEndingDayIfReady() {
   state.lastSavedAt = dayLog.savedAt;
   elements.syncStatus.textContent = "Ending counts complete and locked";
   persistState();
-  await saveCloudState();
+  saveCloudState();
   hydrateActiveDay();
   renderCalendar();
-  renderGames();
+  // Only re-render game rows if no input is currently focused — avoids wiping active entry
+  const activeField = document.activeElement;
+  const isEntryFocused = activeField && activeField.closest("#gameRows");
+  if (!isEntryFocused) {
+    renderGames();
+  } else {
+    // Minimal update: just toggle the lock class without destroying DOM
+    elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
+    // Reapply lock state to all fields except the one being typed in
+    elements.gameRows.querySelectorAll("[data-field='todayEnding']").forEach((f) => {
+      if (f === activeField) return;
+      if (isAdminRole()) {
+        f.classList.add("ending-locked-field");
+      } else {
+        f.disabled = true;
+      }
+    });
+  }
   renderTotals();
 }
 
