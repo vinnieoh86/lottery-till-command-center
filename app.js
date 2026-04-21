@@ -1551,6 +1551,23 @@ function showAppNotice({ eyebrow = "Notice", title, body, confirmText = "OK" }) 
   return showAppConfirm({ eyebrow, title, body, confirmText, cancelText: "" });
 }
 
+function stampEntryFieldUpdate(entry, key, nextValue, timestamp = new Date().toISOString()) {
+  const cleared = nextValue === "" || nextValue === undefined || nextValue === null;
+  if (key === "todayEnding") {
+    entry.todayEndingUpdatedBy = cleared ? "" : currentUserName();
+    entry.todayEndingUpdatedAt = timestamp;
+    entry.updatedBy = cleared ? "" : currentUserName();
+    entry.updatedAt = timestamp;
+    return;
+  }
+  if (key === "manualInstantSold") {
+    entry.manualInstantUpdatedBy = cleared ? "" : currentUserName();
+    entry.manualInstantUpdatedAt = timestamp;
+    entry.updatedBy = cleared ? "" : currentUserName();
+    entry.updatedAt = timestamp;
+  }
+}
+
 function savePreviousDateDraftChange() {
   if (!isPreviousDateDraftMode()) return;
   const dayLog = getDayLog();
@@ -2557,7 +2574,7 @@ async function parseSalesSummaryScan() {
       body: "Sales Summary photo was uploaded and sent to admin review.",
       confirmText: "OK",
     });
-    clearScanReview();
+    clearScanReview(true);
     renderCalendar();
     return;
   }
@@ -2636,7 +2653,7 @@ async function handleManualInstantParsedResult(parsed) {
       body: "Ticket sold pages were uploaded. Manager review is needed before applying them.",
       confirmText: "OK",
     });
-    clearScanReview();
+    clearScanReview(true);
     renderCalendar();
     return;
   }
@@ -2903,12 +2920,27 @@ async function handleScanFiles(type, fileList) {
   }
 }
 
-function clearScanReview() {
-  (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
-  scanDraft = { type: "", files: [], parsed: null };
-  elements.salesSummaryScanInput.value = "";
-  elements.manualInstantScanInput.value = "";
-  renderScanReview();
+function clearScanReview(force = false) {
+  return (async () => {
+    const hasReviewContent = Boolean(scanDraft.type || scanDraft.files?.length || scanDraft.parsed);
+    if (hasReviewContent && !force) {
+      const ok = await showAppConfirm({
+        eyebrow: "Clear review",
+        title: "Clear all Reviews",
+        body: "This removes the current review photos and parsed values from this device. Saved review history stays in History unless you submit new changes.",
+        confirmText: "Yes, clear all",
+        cancelText: "No",
+      });
+      if (!ok) return false;
+    }
+
+    (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
+    scanDraft = { type: "", files: [], parsed: null };
+    elements.salesSummaryScanInput.value = "";
+    elements.manualInstantScanInput.value = "";
+    renderScanReview();
+    return true;
+  })();
 }
 
 async function applySalesSummaryScan() {
@@ -3143,26 +3175,10 @@ function updateEntry(game, key, value, row) {
   const changed = String(entry[key] ?? "") !== String(nextValue);
   entry[key] = nextValue;
   if (changed && key === "todayEnding") {
-    if (nextValue !== "") {
-      entry.todayEndingUpdatedBy = currentUserName();
-      entry.todayEndingUpdatedAt = new Date().toISOString();
-      entry.updatedBy = entry.todayEndingUpdatedBy;
-      entry.updatedAt = entry.todayEndingUpdatedAt;
-    } else {
-      entry.todayEndingUpdatedBy = "";
-      entry.todayEndingUpdatedAt = "";
-    }
+    stampEntryFieldUpdate(entry, key, nextValue);
   }
   if (changed && key === "manualInstantSold") {
-    if (nextValue !== "") {
-      entry.manualInstantUpdatedBy = currentUserName();
-      entry.manualInstantUpdatedAt = new Date().toISOString();
-      entry.updatedBy = entry.manualInstantUpdatedBy;
-      entry.updatedAt = entry.manualInstantUpdatedAt;
-    } else {
-      entry.manualInstantUpdatedBy = "";
-      entry.manualInstantUpdatedAt = "";
-    }
+    stampEntryFieldUpdate(entry, key, nextValue);
   }
 
   row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
@@ -3709,6 +3725,11 @@ async function clearEntryColumn(column) {
       // Also clear per-entry ending lock fields
       entry.endingCompletedBy = "";
       entry.endingCompletedAt = null;
+    }
+    if (isManual) {
+      stampEntryFieldUpdate(entry, "manualInstantSold", "", now);
+    } else {
+      stampEntryFieldUpdate(entry, "todayEnding", "", now);
     }
   });
   dayLog.totals = buildTotals();
@@ -4688,4 +4709,3 @@ if (!savedSession?.role) {
 } else {
   resetIdleTimer();
 }
-
