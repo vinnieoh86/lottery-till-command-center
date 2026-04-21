@@ -844,21 +844,120 @@ async function loadCloudState() {
   }
 
   isApplyingCloudState = true;
+  let _mergeHadLocalNewer = false;
   try {
     const activeDate = state.businessDate || todayIso();
-    state = normalizeStoredState({ ...data.state, businessDate: activeDate });
+    const cloudState = data.state;
+
+    // --- Field-level merge for dailyLogs entries ---
+    // For each date in cloud, merge entries field-by-field using updatedAt timestamps.
+    // This prevents a slower device from overwriting fresher local edits.
+    const mergedDailyLogs = { ...cloudState.dailyLogs };
+    const localLogs = state.dailyLogs || {};
+
+    Object.keys(localLogs).forEach((date) => {
+      const localLog = localLogs[date];
+      const cloudLog = mergedDailyLogs[date];
+      if (!cloudLog) {
+        // Local has a date cloud doesn't — keep it
+        mergedDailyLogs[date] = localLog;
+        _mergeHadLocalNewer = true;
+        return;
+      }
+      // Merge entries field by field
+      const mergedEntries = { ...cloudLog.entries };
+      Object.keys(localLog.entries || {}).forEach((boxId) => {
+        const localEntry = localLog.entries[boxId];
+        const cloudEntry = cloudLog.entries?.[boxId];
+        if (!cloudEntry) {
+          mergedEntries[boxId] = localEntry;
+          _mergeHadLocalNewer = true;
+          return;
+        }
+        // todayEnding: keep whichever has a newer updatedAt
+        const localEndingTs = localEntry.todayEndingUpdatedAt || localEntry.updatedAt || "";
+        const cloudEndingTs = cloudEntry.todayEndingUpdatedAt || cloudEntry.updatedAt || "";
+        const useLocalEnding = localEndingTs > cloudEndingTs;
+
+        // manualInstantSold: same logic
+        const localManualTs = localEntry.manualInstantUpdatedAt || "";
+        const cloudManualTs = cloudEntry.manualInstantUpdatedAt || "";
+        const useLocalManual = localManualTs > cloudManualTs;
+
+        if (useLocalEnding || useLocalManual) _mergeHadLocalNewer = true;
+
+        mergedEntries[boxId] = {
+          ...cloudEntry,
+          ...(useLocalEnding ? {
+            todayEnding: localEntry.todayEnding,
+            todayEndingUpdatedAt: localEntry.todayEndingUpdatedAt,
+            todayEndingUpdatedBy: localEntry.todayEndingUpdatedBy,
+            updatedAt: localEntry.updatedAt,
+            updatedBy: localEntry.updatedBy,
+            endingCompletedAt: localEntry.endingCompletedAt,
+            endingCompletedBy: localEntry.endingCompletedBy,
+          } : {}),
+          ...(useLocalManual ? {
+            manualInstantSold: localEntry.manualInstantSold,
+            manualInstantUpdatedAt: localEntry.manualInstantUpdatedAt,
+            manualInstantUpdatedBy: localEntry.manualInstantUpdatedBy,
+          } : {}),
+        };
+      });
+
+      // Merge till and cashCounts: use whichever log has the newer savedAt
+      const localSavedAt = localLog.savedAt || "";
+      const cloudSavedAt = cloudLog.savedAt || "";
+      const useLocalTill = localSavedAt > cloudSavedAt;
+      if (useLocalTill) _mergeHadLocalNewer = true;
+
+      mergedDailyLogs[date] = {
+        ...cloudLog,
+        entries: mergedEntries,
+        ...(useLocalTill ? {
+          till: localLog.till,
+          cashCounts: localLog.cashCounts,
+          savedAt: localLog.savedAt,
+          completedAt: localLog.completedAt,
+          completedBy: localLog.completedBy,
+          endingCompletedAt: localLog.endingCompletedAt,
+          endingCompletedBy: localLog.endingCompletedBy,
+        } : {}),
+      };
+    });
+
+    // Merge till fields for the active date using local if newer
+    const mergedTill = (() => {
+      const localLog = localLogs[activeDate];
+      const cloudLog = mergedDailyLogs[activeDate];
+      if (!localLog || !cloudLog) return cloudState.till || state.till;
+      const localSaved = localLog.savedAt || "";
+      const cloudSaved = cloudLog.savedAt || "";
+      return localSaved >= cloudSaved ? state.till : (cloudState.till || state.till);
+    })();
+
+    state = normalizeStoredState({
+      ...cloudState,
+      dailyLogs: mergedDailyLogs,
+      till: mergedTill,
+      businessDate: activeDate,
+    });
     inventory = state.inventory || inventory;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     hydrateActiveDay();
     render();
     renderTillInputs();
     setActiveView(activeView);
-    setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
+    setSyncStatus(`Cloud synced ${new Date(data.updated_at).toLocaleTimeString()}`);
   } catch(e) {
     setSyncStatus(`Apply error: ${e.message || "Could not apply"}`);
   } finally {
     isApplyingCloudState = false;
   }
+  // If local had any newer entry data than cloud, push the merged result back
+  // so all other devices get the canonical merged state. Only do this when
+  // we actually contributed something, to avoid echo loops.
+  if (_mergeHadLocalNewer) saveCloudState();
 }
 
 async function signInToCloud() {
@@ -1640,6 +1739,22 @@ function renderGames() {
   elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
   // FIX 8: mark section so CSS can show the lock indicator
   elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
+
+  // Fix 4: Update column header timestamps for today ending and manual sold
+  const dayEntries = Object.values(state.dailyLogs[state.businessDate]?.entries || {});
+  const latestEndingTs = dayEntries.reduce((best, e) => {
+    const ts = e.todayEndingUpdatedAt || e.updatedAt || "";
+    return ts > best ? ts : best;
+  }, "");
+  const latestManualTs = dayEntries.reduce((best, e) => {
+    const ts = e.manualInstantUpdatedAt || "";
+    return ts > best ? ts : best;
+  }, "");
+  const fmtTs = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  const endingTsEl = document.getElementById("colHeaderEndingTs");
+  const manualTsEl = document.getElementById("colHeaderManualTs");
+  if (endingTsEl) endingTsEl.textContent = fmtTs(latestEndingTs);
+  if (manualTsEl) manualTsEl.textContent = fmtTs(latestManualTs);
 
   inventory.forEach((game, rowIndex) => {
     if (gameSearchQuery) {
@@ -3375,6 +3490,12 @@ function setSummarySortFromHeader(key) {
   renderSummary();
 }
 
+function setMonthMatrixSort(key) {
+  const direction = monthMatrixSort.key === key && monthMatrixSort.direction === "asc" ? "desc" : "asc";
+  monthMatrixSort = { key, direction };
+  renderMonthMatrix();
+}
+
 function updateSortHeaderState() {
   elements.sortHeaders.forEach((button) => {
     const isActive = button.dataset.sortKey === summarySort.key;
@@ -3488,11 +3609,12 @@ async function clearEntryColumn(column) {
   }
   state.lastSavedAt = dayLog.savedAt;
   persistState();
-  await saveCloudState();
   hydrateActiveDay();
   render();
   setActiveView(activeView);
   elements.syncStatus.textContent = isManual ? "Manual sold cleared" : "Ending numbers cleared";
+  // Fire cloud save without awaiting so UI clears instantly
+  saveCloudState();
 }
 
 function seedApril2026SheetData() {
@@ -3623,17 +3745,33 @@ function seedApril2026SheetData() {
 
 function renderMonthMatrix() {
   const dates = selectedMonthDates();
+
+  // Sort visibleGames by monthMatrixSort
+  const sortDir = monthMatrixSort.direction === "asc" ? 1 : -1;
   const visibleGames = inventory
     .filter((game) => game.value !== "")
     .filter((game) => summaryValueFilter === "all" || String(game.value) === summaryValueFilter)
-    .sort((a, b) => normalizeNumber(a.value) - normalizeNumber(b.value) || String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
+    .sort((a, b) => {
+      const key = monthMatrixSort.key;
+      if (key === "box") return String(a.box).localeCompare(String(b.box), undefined, { numeric: true }) * sortDir;
+      if (key === "value") return (normalizeNumber(a.value) - normalizeNumber(b.value)) * sortDir;
+      if (key === "bookNumber") return String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }) * sortDir;
+      if (key === "game") return String(a.name || "").localeCompare(String(b.name || "")) * sortDir;
+      // default fallback
+      return (normalizeNumber(a.value) - normalizeNumber(b.value)) || String(a.box).localeCompare(String(b.box), undefined, { numeric: true });
+    });
+
+  const sortArrow = (key) => {
+    if (monthMatrixSort.key !== key) return " ↕";
+    return monthMatrixSort.direction === "asc" ? " ↑" : " ↓";
+  };
 
   elements.monthMatrixHead.innerHTML = `
     <tr>
-      <th>Box</th>
-      <th>Value</th>
-      <th>Book #</th>
-      <th>Game</th>
+      <th><button class="matrix-sort-btn${monthMatrixSort.key === "box" ? " active" : ""}" data-matrix-sort="box">Box${sortArrow("box")}</button></th>
+      <th><button class="matrix-sort-btn${monthMatrixSort.key === "value" ? " active" : ""}" data-matrix-sort="value">Value${sortArrow("value")}</button></th>
+      <th><button class="matrix-sort-btn${monthMatrixSort.key === "bookNumber" ? " active" : ""}" data-matrix-sort="bookNumber">Book #${sortArrow("bookNumber")}</button></th>
+      <th><button class="matrix-sort-btn${monthMatrixSort.key === "game" ? " active" : ""}" data-matrix-sort="game">Game${sortArrow("game")}</button></th>
       ${dates
         .map((date) => {
           const day = new Date(`${date}T12:00:00`).getDate();
@@ -3645,12 +3783,17 @@ function renderMonthMatrix() {
       <th class="month-total-col">Books</th>
     </tr>
   `;
+
+  // Attach sort click handlers
+  elements.monthMatrixHead.querySelectorAll("[data-matrix-sort]").forEach((btn) => {
+    btn.addEventListener("click", () => setMonthMatrixSort(btn.dataset.matrixSort));
+  });
   elements.monthMatrixRows.innerHTML = "";
 
   let currentValue = null;
 
   visibleGames.forEach((game) => {
-    if (currentValue !== game.value) {
+    if (monthMatrixSort.key === "value" && currentValue !== game.value) {
       currentValue = game.value;
       const groupRow = document.createElement("tr");
       groupRow.className = "matrix-group-row";
