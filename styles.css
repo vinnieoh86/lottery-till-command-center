@@ -2885,3 +2885,53 @@ pre {
 .matrix-sort-btn.active {
   color: var(--green);
 }
+
+/* ── Fix 1: chip time in blue ── */
+.chip-time {
+  color: #2563eb;
+  font-weight: 900;
+}
+
+/* ── Fix 2: table font bump + column width tightening ── */
+th,
+td {
+  font-size: 0.92rem !important;
+}
+
+th {
+  font-size: 0.67rem !important;
+}
+
+/* Tighten Yesterday → right columns */
+#daily-entry th:nth-child(5),
+#daily-entry td:nth-child(5) { width: 4.2rem; max-width: 4.2rem; }   /* Yesterday */
+#daily-entry th:nth-child(6),
+#daily-entry td:nth-child(6) { width: 6rem;   max-width: 6rem; }     /* Today ending */
+#daily-entry th:nth-child(7),
+#daily-entry td:nth-child(7) { width: 4.2rem; max-width: 4.2rem; }   /* Tickets sold */
+#daily-entry th:nth-child(8),
+#daily-entry td:nth-child(8) { width: 5.5rem; max-width: 5.5rem; }   /* Auto sales */
+#daily-entry th:nth-child(9),
+#daily-entry td:nth-child(9) { width: 6.2rem; max-width: 6.2rem; }   /* Manual sold */
+#daily-entry th:nth-child(10),
+#daily-entry td:nth-child(10){ width: 4rem;   max-width: 4rem; }     /* Month tickets */
+
+/* ── Fix 4: stronger red/green mismatch on manual sold ── */
+.manual-mismatch-cell {
+  background: rgba(179,58,58,0.13) !important;
+}
+.manual-mismatch-cell input {
+  border: 2px solid #b33a3a !important;
+  color: #7d1717 !important;
+  font-weight: 900 !important;
+  background: rgba(255,224,224,0.95) !important;
+}
+.manual-match-cell {
+  background: rgba(31,122,79,0.08) !important;
+}
+.manual-match-cell input {
+  border: 2px solid rgba(31,122,79,0.7) !important;
+  color: #145232 !important;
+  font-weight: 900 !important;
+  background: rgba(220,255,234,0.9) !important;
+}

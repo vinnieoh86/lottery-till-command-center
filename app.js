@@ -494,7 +494,8 @@ function currentUserName() {
 function formatAuditBadge(name, timestamp) {
   if (!name) return "";
   if (!timestamp) return name;
-  return `${name} ${new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  const time = new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `${name} <span class="chip-time">${time}</span>`;
 }
 
 function loadSessionAccess() {
@@ -783,7 +784,13 @@ function focusAdjacentMobileGame(direction) {
 }
 
 function scheduleCloudSave() {
-  if (isApplyingCloudState || !supabaseClient) return;
+  if (!supabaseClient) return;
+  if (isApplyingCloudState) {
+    // Cloud load in progress — retry after it finishes so edits aren't lost
+    window.clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = window.setTimeout(() => scheduleCloudSave(), 1500);
+    return;
+  }
   window.clearTimeout(cloudSaveTimer);
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
@@ -792,17 +799,19 @@ function scheduleCloudSave() {
 }
 
 async function saveCloudState() {
-  if (!supabaseClient) {
-    setSyncStatus("Supabase offline");
+  if (!supabaseClient || isApplyingCloudState) {
+    if (!supabaseClient) setSyncStatus("Supabase offline");
     return;
   }
   // Flag our own save so realtime callback ignores the echo
   recentlySavedToCloud = true;
   window.clearTimeout(recentlySavedTimer);
-  // Use 6s window — realtime can lag on slow connections
-  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 6000);
+  // Use 8s window — realtime can lag on slow connections
+  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 8000);
   setSyncStatus("Syncing cloud…");
   const saveTimestamp = new Date().toISOString();
+  // CRITICAL: store in state so the realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
+  state._ownSaveTimestamp = saveTimestamp;
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
     {
       store_key: CLOUD_STORE_KEY,
@@ -954,10 +963,12 @@ async function loadCloudState() {
   } finally {
     isApplyingCloudState = false;
   }
-  // If local had any newer entry data than cloud, push the merged result back
-  // so all other devices get the canonical merged state. Only do this when
-  // we actually contributed something, to avoid echo loops.
-  if (_mergeHadLocalNewer) saveCloudState();
+  // If local had genuinely newer data, push merged result back to cloud.
+  // Use a short delay so we don't immediately echo-loop with the device that just saved.
+  // The isApplyingCloudState guard in saveCloudState prevents re-entrant calls.
+  if (_mergeHadLocalNewer) {
+    window.setTimeout(() => saveCloudState(), 500);
+  }
 }
 
 async function signInToCloud() {
@@ -1702,7 +1713,8 @@ function switchDate(isoDate) {
   ensurePreviousDateDraft();
   persistState();
   render();
-  setActiveView(activeView);
+  // Don't scroll on date change — user is already in the right place
+  setActiveView(activeView, false);
   window.setTimeout(() => {
     setDailyEntryDateLabel(state.businessDate);
     renderGames();
@@ -1801,7 +1813,7 @@ function renderGames() {
     if (endingChip) {
       const endingBy = entry.todayEndingUpdatedBy || entry.updatedBy || entry.endingCompletedBy || entry.completedBy || "";
       const endingAt = entry.todayEndingUpdatedAt || entry.updatedAt || entry.endingCompletedAt || entry.completedAt || "";
-      endingChip.textContent = formatAuditBadge(endingBy, endingAt);
+      endingChip.innerHTML = formatAuditBadge(endingBy, endingAt);
       endingChip.title = endingAt ? `Ending updated ${new Date(endingAt).toLocaleString()} by ${endingBy || "unknown"}` : "Ending not updated yet";
       endingChip.classList.toggle("edited-chip", Boolean(endingBy));
     }
@@ -1809,7 +1821,7 @@ function renderGames() {
     if (manualChip) {
       const manualBy = entry.manualInstantUpdatedBy || "";
       const manualAt = entry.manualInstantUpdatedAt || "";
-      manualChip.textContent = formatAuditBadge(manualBy, manualAt);
+      manualChip.innerHTML = formatAuditBadge(manualBy, manualAt);
       manualChip.title = manualAt ? `Manual sold updated ${new Date(manualAt).toLocaleString()} by ${manualBy || "unknown"}` : "Manual sold not updated yet";
       manualChip.classList.toggle("edited-chip", Boolean(manualBy));
     }
@@ -1838,6 +1850,14 @@ function renderGames() {
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
+      // Fix 3: reformat manual sold as dollar value (2 decimal places) on blur
+      if (field.dataset.field === "manualInstantSold") {
+        field.addEventListener("blur", () => {
+          if (field.value !== "") {
+            field.value = normalizeNumber(field.value).toFixed(2);
+          }
+        });
+      }
       field.addEventListener("focus", () => {
         field.dataset.previousValue = field.value;
         if (field.dataset.field === "todayEnding") {
@@ -3111,12 +3131,12 @@ function updateEntry(game, key, value, row) {
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
   const endingChip = row.querySelector(".ending-chip");
   if (endingChip) {
-    endingChip.textContent = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt);
+    endingChip.innerHTML = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt);
     endingChip.classList.toggle("edited-chip", Boolean(entry.todayEndingUpdatedBy || entry.updatedBy));
   }
   const manualChip = row.querySelector(".manual-chip");
   if (manualChip) {
-    manualChip.textContent = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt);
+    manualChip.innerHTML = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt);
     manualChip.classList.toggle("edited-chip", Boolean(entry.manualInstantUpdatedBy));
   }
 
@@ -3536,9 +3556,8 @@ function setActiveView(view, shouldScroll = false) {
     section.classList.toggle("view-hidden", !views.includes(view));
   });
 
-  // On mobile, always scroll to the active section and ensure daily entry is expanded
-  const isMobile = window.matchMedia("(max-width: 760px)").matches;
-  if (shouldScroll || isMobile) {
+  // Scroll to the active section only when explicitly requested (nav button tap)
+  if (shouldScroll) {
     const targetMap = {
       daily: elements.dailyEntrySection,
       till: elements.tillSection,
@@ -3549,8 +3568,8 @@ function setActiveView(view, shouldScroll = false) {
     };
     const target = targetMap[view];
     if (target) {
-      // On mobile, ensure the panel body is expanded before scrolling
-      if (isMobile && view === "daily") {
+      // Ensure daily entry panel is expanded before scrolling
+      if (view === "daily") {
         const body = document.querySelector("#daily-entry-body");
         const toggle = document.querySelector("[data-toggle-target='daily-entry-body']");
         if (body && body.hidden) {
