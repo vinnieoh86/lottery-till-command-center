@@ -270,7 +270,27 @@ select:focus {
   box-shadow: none;
 }
 
+.pin-status-card {
+  display: grid;
+  gap: 0.42rem;
+  margin-top: 0.55rem;
+  border-radius: 0.9rem;
+  padding: 0.68rem;
+  background: rgba(201, 242, 74, 0.12);
+}
 
+.pin-status-card p {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.pin-status-card strong {
+  color: var(--lime);
+  font-size: 0.82rem;
+}
 
 .pin-overlay {
   position: fixed;
@@ -1157,19 +1177,6 @@ input[inputmode="numeric"],
   gap: 0.8rem;
 }
 
-.lottery-totals-panel .form-grid label {
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.lottery-totals-panel .form-grid input {
-  font-size: 1.05rem;
-  font-weight: 900;
-  font-family: var(--numeric-font);
-  font-variant-numeric: tabular-nums;
-  padding: 0.6rem 0.7rem;
-}
-
 .formula-note {
   margin: 0.75rem 0 0;
   border: 1px solid rgba(31, 122, 79, 0.18);
@@ -1973,21 +1980,13 @@ pre {
   accent-color: #b33a3a;
 }
 
-.dc-check input:checked + span {
+.dc-check input:checked + span,
+.dc-row td {
   color: #9e1919;
   font-weight: 800;
 }
 
-/* dc-row red styling ONLY applies in order sheet and summary tables, not daily entry */
-.order-table .dc-row td,
-.summary-table .dc-row td,
-.month-matrix-table .dc-row td {
-  color: #9e1919;
-  font-weight: 800;
-}
-
-.order-table .dc-row td:first-child::after,
-.summary-table .dc-row td:first-child::after {
+.dc-row td:first-child::after {
   content: " DC";
   color: #9e1919;
   font-family: "IBM Plex Mono", monospace;
@@ -2207,97 +2206,6 @@ pre {
   text-transform: uppercase;
 }
 
-/* Search bar in daily entry heading */
-.game-search-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.game-search-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.45rem 0.55rem;
-  border-radius: 999px;
-}
-
-.game-search-input {
-  width: 11rem;
-  border-radius: 999px;
-  padding: 0.42rem 0.8rem;
-  font-size: 0.84rem;
-  background: rgba(255, 255, 255, 0.9);
-  transition: width 200ms ease;
-}
-
-.game-search-input:focus {
-  width: 14rem;
-  border-color: var(--green);
-  outline: 3px solid rgba(31, 122, 79, 0.16);
-}
-
-/* Slim down sidebar pin-status-card — no badge pill needed */
-.pin-status-card {
-  margin-top: 0.5rem;
-  border-radius: 0.9rem;
-  padding: 0.5rem 0.65rem;
-  background: rgba(255, 255, 255, 0.08);
-  font-size: 0.72rem;
-}
-
-.pin-status-card p {
-  margin: 0 0 0.18rem;
-  color: rgba(247, 241, 223, 0.55);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.pin-status-card strong {
-  display: block;
-  color: var(--lime);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.pin-status-card button {
-  display: block;
-  width: 100%;
-  margin-top: 0.38rem;
-  padding: 0.38rem 0.5rem;
-  color: rgba(247, 241, 223, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.07);
-  font-size: 0.7rem;
-}
-
-/* Manual sold $ cell — mismatch vs auto sales in daily entry table */
-.manual-mismatch-cell {
-  background: rgba(179, 58, 58, 0.08) !important;
-}
-
-.manual-mismatch-cell input {
-  border-color: rgba(179, 58, 58, 0.6) !important;
-  color: #7d1717 !important;
-  background: rgba(255, 232, 232, 0.9) !important;
-}
-
-.manual-match-cell input {
-  border-color: rgba(31, 122, 79, 0.4) !important;
-  background: rgba(230, 255, 224, 0.7) !important;
-}
-
-/* Reconcile match cell coloring */
-.reconcile-ok-cell {
-  color: var(--green);
-  font-weight: 900;
-}
-
 .sort-header:hover,
 .sort-header.active {
   color: var(--coal);
@@ -2360,85 +2268,10 @@ pre {
   }
 }
 
-/* Realtime push sync notification banner */
-.realtime-banner {
-  position: fixed;
-  bottom: 1.2rem;
-  left: 50%;
-  z-index: 300;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  border: 1px solid rgba(31, 122, 79, 0.35);
-  border-radius: 999px;
-  padding: 0.6rem 0.9rem 0.6rem 1.1rem;
-  color: var(--coal);
-  background: rgba(255, 253, 240, 0.97);
-  box-shadow: 0 8px 32px rgba(31, 38, 34, 0.22);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
-  animation: bannerSlideUp 250ms ease;
-}
-
-.realtime-banner-review {
-  border-color: rgba(179, 58, 58, 0.55);
-  background: rgba(255, 240, 240, 0.98);
-  color: #7d1717;
-  box-shadow: 0 8px 32px rgba(179, 58, 58, 0.22);
-}
-
-.realtime-banner-sync {
-  border-radius: 999px;
-  padding: 0.3rem 0.75rem;
-  color: #f7f1df;
-  background: var(--coal);
-  font-size: 0.74rem;
-  font-weight: 900;
-}
-
-.realtime-banner-review .realtime-banner-sync {
-  background: var(--red);
-}
-
-.realtime-banner-dismiss {
-  border-radius: 999px;
-  padding: 0.25rem 0.5rem;
-  color: var(--muted);
-  background: transparent;
-  font-size: 0.72rem;
-  box-shadow: none;
-}
-
-.realtime-banner-dismiss:hover {
-  background: rgba(0,0,0,0.06);
-  box-shadow: none;
-  transform: none;
-}
-
-@keyframes bannerSlideUp {
-  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-
 @media (max-width: 760px) {
-  .realtime-banner {
-    bottom: 5.5rem;
-    left: 0.7rem;
-    right: 0.7rem;
-    transform: none;
-    border-radius: 1rem;
-    white-space: normal;
-    font-size: 0.82rem;
+  body {
+    padding-bottom: 5rem;
   }
-  @keyframes bannerSlideUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-}
-
 
   .shell {
     padding: 0.45rem;
@@ -2731,14 +2564,6 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .game-search-input {
-    width: 8rem;
-  }
-
-  .game-search-input:focus {
-    width: 10rem;
-  }
-
   .complete-order-card button {
     width: 100%;
   }
@@ -2879,4 +2704,124 @@ pre {
   .section-heading span {
     text-align: left;
   }
+}
+
+
+/* ── NEW ADDITIONS ─────────────────────────────────────────── */
+
+/* Search bar in daily entry heading */
+.game-search-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.game-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.55rem;
+  border-radius: 999px;
+}
+.game-search-input {
+  width: 11rem;
+  border-radius: 999px;
+  padding: 0.42rem 0.8rem;
+  font-size: 0.84rem;
+  background: rgba(255,255,255,0.9);
+  transition: width 200ms ease;
+}
+.game-search-input:focus {
+  width: 14rem;
+  border-color: var(--green);
+  outline: 3px solid rgba(31,122,79,0.16);
+}
+
+/* Manual sold $ cell — mismatch vs auto sales */
+.manual-mismatch-cell {
+  background: rgba(179,58,58,0.08) !important;
+}
+.manual-mismatch-cell input {
+  border-color: rgba(179,58,58,0.6) !important;
+  color: #7d1717 !important;
+  background: rgba(255,232,232,0.9) !important;
+}
+.manual-match-cell input {
+  border-color: rgba(31,122,79,0.4) !important;
+  background: rgba(230,255,224,0.7) !important;
+}
+
+/* Reconcile match cell */
+.reconcile-ok-cell {
+  color: var(--green);
+  font-weight: 900;
+}
+
+/* Realtime push sync notification banner */
+.realtime-banner {
+  position: fixed;
+  bottom: 1.2rem;
+  left: 50%;
+  z-index: 300;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid rgba(31,122,79,0.35);
+  border-radius: 999px;
+  padding: 0.6rem 0.9rem 0.6rem 1.1rem;
+  color: var(--coal);
+  background: rgba(255,253,240,0.97);
+  box-shadow: 0 8px 32px rgba(31,38,34,0.22);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  animation: bannerSlideUp 250ms ease;
+}
+.realtime-banner-review {
+  border-color: rgba(179,58,58,0.55);
+  background: rgba(255,240,240,0.98);
+  color: #7d1717;
+  box-shadow: 0 8px 32px rgba(179,58,58,0.22);
+}
+.realtime-banner-sync {
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  color: #f7f1df;
+  background: var(--coal);
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+.realtime-banner-review .realtime-banner-sync {
+  background: var(--red);
+}
+.realtime-banner-dismiss {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+.realtime-banner-dismiss:hover {
+  background: rgba(0,0,0,0.06);
+  box-shadow: none;
+  transform: none;
+}
+@keyframes bannerSlideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@media (max-width: 760px) {
+  .realtime-banner {
+    bottom: 5.5rem;
+    left: 0.7rem;
+    right: 0.7rem;
+    transform: none;
+    border-radius: 1rem;
+    white-space: normal;
+    font-size: 0.82rem;
+  }
+  .game-search-input { width: 8rem; }
+  .game-search-input:focus { width: 10rem; }
 }

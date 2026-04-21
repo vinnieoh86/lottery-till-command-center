@@ -2,6 +2,7 @@ const STORAGE_KEY = "lotteryTillState:v2";
 const SESSION_KEY = "lotteryTillSession:v1";
 const CLOUD_STORE_KEY = "lottery-till-main";
 const IDLE_LOCK_MS = 180000;
+const DEVICE_ID = `device-${Math.random().toString(36).slice(2,9)}`;
 const SUPABASE_URL = "https://psngcbeffraghwwuihsk.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzbmdjYmVmZnJhZ2h3d3VpaHNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyOTE2NzYsImV4cCI6MjA5MTg2NzY3Nn0.FzLgqimL1vrwX1PEx4zVTqyfwgKqKrOs9ueVfIXSAKw";
@@ -310,11 +311,15 @@ state.businessDate = todayIso();
 state.uiSettings = { ...(state.uiSettings || {}), mobileEntryDock: "bottom" };
 inventory = state.inventory || inventory;
 let summaryMode = "week";
+let gameSearchQuery = "";
+let monthMatrixSort = { key: "box", direction: "asc" };
+let recentlySavedToCloud = false;
+let recentlySavedTimer = null;
+let realtimeChannel = null;
+let realtimeNotifyBanner = null;
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
-let monthMatrixSort = { key: "box", direction: "asc" };
 let managerReportRange = "month";
-let gameSearchQuery = "";
 let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
@@ -444,11 +449,7 @@ function persistState() {
 
 function getSerializableState() {
   state.inventory = inventory;
-  return {
-    ...state,
-    inventory,
-    _deviceId: DEVICE_ID,
-  };
+  return { ...state, inventory, _deviceId: DEVICE_ID };
 }
 
 function setSyncStatus(message) {
@@ -465,21 +466,16 @@ function renderAuthState() {
   elements.authPassword.hidden = true;
   elements.authActions.hidden = true;
   elements.authSignOutButton.hidden = true;
-  // Sign in/Create are not used — app syncs via anon key automatically
-  elements.authSignInButton.hidden = true;
-  elements.authSignUpButton.hidden = true;
-  elements.authSignInButton.disabled = true;
-  elements.authSignUpButton.disabled = true;
   elements.cloudSyncButton.disabled = !online;
   elements.mobileSyncButton.disabled = !online;
+  elements.authSignInButton.disabled = true;
+  elements.authSignUpButton.disabled = true;
 
-  // Only set status if realtime isn't already active — don't overwrite "Live sync active ✓"
   if (!supabaseClient) {
     setSyncStatus("Local draft");
   } else if (!realtimeChannel) {
     setSyncStatus("Auto sync ready");
   }
-  // If realtimeChannel exists, leave the current status alone
 }
 
 function isAdminRole() {
@@ -652,10 +648,7 @@ function resetIdleTimer() {
   if (!accessRole) return;
 
   idleLockTimer = window.setTimeout(async () => {
-    // Pull latest cloud state before locking so nothing is lost
-    if (supabaseClient && !isApplyingCloudState) {
-      await loadCloudState();
-    }
+    if (supabaseClient && !isApplyingCloudState) await loadCloudState();
     lockApp("Locked after 3 minutes idle.");
   }, IDLE_LOCK_MS);
 }
@@ -797,23 +790,15 @@ function scheduleCloudSave() {
   }, 1200);
 }
 
-let recentlySavedToCloud = false;
-let recentlySavedTimer = null;
-
 async function saveCloudState() {
   if (!supabaseClient) {
     setSyncStatus("Supabase offline");
     return;
   }
-
-  // Flag OUR save so realtime callback ignores the echo on this device only
+  // Flag our own save so realtime callback ignores the echo
   recentlySavedToCloud = true;
   window.clearTimeout(recentlySavedTimer);
-  // Reset flag after 1.5s — enough to ignore our own echo, short enough to not block remote updates
-  recentlySavedTimer = window.setTimeout(() => {
-    recentlySavedToCloud = false;
-  }, 1500);
-
+  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 1500);
   setSyncStatus("Syncing cloud");
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
     {
@@ -829,7 +814,6 @@ async function saveCloudState() {
     recentlySavedToCloud = false;
     return;
   }
-
   setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
 }
 
@@ -839,25 +823,12 @@ async function loadCloudState() {
     return;
   }
 
-  // Guard: if already applying, don't stack another load
-  if (isApplyingCloudState) {
-    setSyncStatus("Sync already in progress");
-    return;
-  }
-
-  setSyncStatus("Loading cloud…");
-
-  let data, error;
-  try {
-    ({ data, error } = await supabaseClient
-      .from("app_state_snapshots")
-      .select("state, updated_at")
-      .eq("store_key", CLOUD_STORE_KEY)
-      .maybeSingle());
-  } catch (fetchError) {
-    setSyncStatus(`Load error: ${fetchError.message || "Network error"}`);
-    return;
-  }
+  setSyncStatus("Loading cloud");
+  const { data, error } = await supabaseClient
+    .from("app_state_snapshots")
+    .select("state, updated_at")
+    .eq("store_key", CLOUD_STORE_KEY)
+    .maybeSingle();
 
   if (error) {
     setSyncStatus(`Load error: ${error.message}`);
@@ -875,13 +846,13 @@ async function loadCloudState() {
     state = normalizeStoredState({ ...data.state, businessDate: activeDate });
     inventory = state.inventory || inventory;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    hydrateActiveDay();  // sets state.till from dayLog.till
-    render();            // renders everything including till inputs
-    renderTillInputs();  // force a second pass to guarantee till fields are current
+    hydrateActiveDay();
+    render();
+    renderTillInputs();
     setActiveView(activeView);
     setSyncStatus(`Cloud loaded ${new Date(data.updated_at).toLocaleTimeString()}`);
-  } catch (applyError) {
-    setSyncStatus(`Apply error: ${applyError.message || "Could not apply cloud state"}`);
+  } catch(e) {
+    setSyncStatus(`Apply error: ${e.message || "Could not apply"}`);
   } finally {
     isApplyingCloudState = false;
   }
@@ -900,105 +871,51 @@ async function signOutOfCloud() {
   renderAuthState();
 }
 
-const DEVICE_ID = `device-${Math.random().toString(36).slice(2, 9)}`;
-let realtimeChannel = null;
-let realtimeNotifyBanner = null;
-let lastSaveDeviceId = "";
-
 function showRealtimeBanner(message, isReview = false) {
-  // Remove any existing banner
   if (realtimeNotifyBanner) realtimeNotifyBanner.remove();
-
   const banner = document.createElement("div");
   banner.className = `realtime-banner${isReview ? " realtime-banner-review" : ""}`;
-  banner.innerHTML = `
-    <span>${message}</span>
-    <button type="button" class="realtime-banner-sync">Sync now</button>
-    <button type="button" class="realtime-banner-dismiss" aria-label="Dismiss">✕</button>
-  `;
+  banner.innerHTML = `<span>${message}</span><button type="button" class="realtime-banner-sync">Sync now</button><button type="button" class="realtime-banner-dismiss" aria-label="Dismiss">✕</button>`;
   document.body.appendChild(banner);
   realtimeNotifyBanner = banner;
-
   banner.querySelector(".realtime-banner-sync").addEventListener("click", async () => {
-    banner.remove();
-    realtimeNotifyBanner = null;
-    await loadCloudState();
+    banner.remove(); realtimeNotifyBanner = null; await loadCloudState();
   });
   banner.querySelector(".realtime-banner-dismiss").addEventListener("click", () => {
-    banner.remove();
-    realtimeNotifyBanner = null;
+    banner.remove(); realtimeNotifyBanner = null;
   });
-
-  // Auto-dismiss non-review banners after 8 seconds
   if (!isReview) {
-    window.setTimeout(() => {
-      if (realtimeNotifyBanner === banner) {
-        banner.remove();
-        realtimeNotifyBanner = null;
-      }
-    }, 8000);
+    window.setTimeout(() => { if (realtimeNotifyBanner === banner) { banner.remove(); realtimeNotifyBanner = null; } }, 8000);
   }
 }
 
 function subscribeToRealtimeSync() {
   if (!supabaseClient || realtimeChannel) return;
-
   realtimeChannel = supabaseClient
     .channel("app-state-changes")
-    .on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "app_state_snapshots",
-        filter: `store_key=eq.${CLOUD_STORE_KEY}`,
-      },
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "app_state_snapshots", filter: `store_key=eq.${CLOUD_STORE_KEY}` },
       async (payload) => {
-        // Ignore if we are mid-apply or we just saved ourselves
-        if (isApplyingCloudState) return;
-        if (recentlySavedToCloud) return;
-
-        // Always fetch fresh state from Supabase — never rely on payload.new.state
-        // (realtime payload is capped at 1MB and may be null for large state objects)
+        if (isApplyingCloudState || recentlySavedToCloud) return;
         const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
         const previousLastSaved = state.lastSavedAt;
-
         await loadCloudState();
-
-        // After loading, check what changed to show the right notification
         const newScanCount = (state.scanRecords?.[todayIso()] || []).length;
-        const newPendingReview = (state.scanRecords?.[todayIso()] || []).some(
-          (r) => r.status === "pending-review"
-        );
-
+        const newPendingReview = (state.scanRecords?.[todayIso()] || []).some(r => r.status === "pending-review");
         if (newScanCount > previousScanCount && newPendingReview && isAdminRole()) {
           showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
-          // Auto-navigate to daily view and open scan review panel
           setActiveView("daily");
           const scanPanel = document.querySelector("#scanReviewPanel");
           if (scanPanel) scanPanel.hidden = false;
           renderScanReview();
         } else if (state.lastSavedAt !== previousLastSaved) {
-          const savedBy = state.dailyLogs?.[todayIso()]?.completedBy ||
-                          state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
+          const savedBy = state.dailyLogs?.[todayIso()]?.completedBy || state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
           showRealtimeBanner(`✓ Synced from ${savedBy}`);
         }
-      },
-    )
+      })
     .subscribe((status, err) => {
-      if (status === "SUBSCRIBED") {
-        setSyncStatus("Live sync active ✓");
-      } else if (status === "CHANNEL_ERROR") {
-        const msg = err?.message || "";
-        if (msg.includes("replication") || msg.includes("publication")) {
-          setSyncStatus("⚠ Enable Realtime on app_state_snapshots in Supabase");
-        } else {
-          setSyncStatus("Live sync error — tap Sync now");
-        }
-        realtimeChannel = null;
-        window.setTimeout(subscribeToRealtimeSync, 15000);
-      } else if (status === "TIMED_OUT") {
-        setSyncStatus("Live sync timed out — retrying…");
+      if (status === "SUBSCRIBED") { setSyncStatus("Live sync active ✓"); }
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setSyncStatus("Live sync error — tap Sync now");
         realtimeChannel = null;
         window.setTimeout(subscribeToRealtimeSync, 15000);
       }
@@ -1009,7 +926,6 @@ async function initCloudSync() {
   renderAuthState();
   if (!supabaseClient) return;
   await loadCloudState();
-  // Start realtime push subscription after initial load
   subscribeToRealtimeSync();
 }
 
@@ -1198,7 +1114,6 @@ function calculateInstantSales(date = state.businessDate) {
 }
 
 function calculateManualInstantSales(date = state.businessDate) {
-  // manualInstantSold is stored as dollar amount directly
   return inventory.reduce((sum, game) => {
     return sum + normalizeNumber(getEntry(game, date).manualInstantSold);
   }, 0);
@@ -1718,13 +1633,9 @@ function renderGames() {
   elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
 
   inventory.forEach((game, rowIndex) => {
-    // Search filter
     if (gameSearchQuery) {
       const q = gameSearchQuery.toLowerCase();
-      const matchName = (game.name || "").toLowerCase().includes(q);
-      const matchBook = (game.bookNumber || "").includes(q);
-      const matchBox = String(game.box).toLowerCase().includes(q);
-      if (!matchName && !matchBook && !matchBox) return;
+      if (!(game.name||"").toLowerCase().includes(q) && !(game.bookNumber||"").includes(q) && !String(game.box).includes(q)) return;
     }
     const entry = getEntry(game);
     const row = elements.gameRowTemplate.content.firstElementChild.cloneNode(true);
@@ -1733,7 +1644,6 @@ function renderGames() {
     row.draggable = inventoryEditMode;
     row.dataset.inventoryId = id;
     row.classList.toggle("inventory-editing-row", inventoryEditMode);
-    // Note: dc-row class intentionally NOT applied to daily entry rows (no red highlights in daily view)
     row.querySelectorAll("[data-static]").forEach((field) => {
       const key = field.dataset.static;
       if (inventoryEditMode && ["bookNumber", "name", "value"].includes(key)) {
@@ -1755,13 +1665,10 @@ function renderGames() {
         field.textContent = key === "value" ? formatGameValue(game) : game[key] || "-";
       }
     });
-    // dc-row NOT toggled here — no red highlights in daily entry view
-
+    // dc-row not applied in daily entry view
     row.querySelector("[data-output='previousEnding']").textContent = getPreviousEnding(game);
     row.querySelector("[data-field='todayEnding']").value = entry.todayEnding;
-    // manualInstantSold stored as $$$ — show as decimal value
-    const manualRaw = entry.manualInstantSold;
-    row.querySelector("[data-field='manualInstantSold']").value = manualRaw !== "" && manualRaw !== undefined ? normalizeNumber(manualRaw).toFixed(2) : "";
+    const _mv = entry.manualInstantSold; row.querySelector("[data-field='manualInstantSold']").value = _mv !== '' && _mv !== undefined ? normalizeNumber(_mv).toFixed(2) : '';
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
@@ -1785,8 +1692,6 @@ function renderGames() {
     const autoValue = calculateGameSales(game);
     const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
     const manualMismatch = hasManual && Math.abs(manualValue - autoValue) > 0.009;
-
-    // Highlight the manual sold cell red if entered and doesn't match auto
     const manualCell = row.querySelector("[data-field='manualInstantSold']")?.closest("td");
     if (manualCell) {
       manualCell.classList.toggle("manual-mismatch-cell", manualMismatch);
@@ -2150,57 +2055,34 @@ function renderParsedSalesSummaryRows(parsed) {
   return `${mismatch}${warnings}${rows}`;
 }
 
-// All Ohio Lottery scratch-off game numbers start with 10xx or 07xx.
-// Build a lookup set from current inventory for fast matching.
+
 function buildInventoryGameNumberSet() {
-  const set = new Set();
-  inventory.forEach((game) => {
-    if (game.bookNumber) set.add(String(game.bookNumber).padStart(4, "0"));
-  });
-  return set;
+  const s = new Set();
+  inventory.forEach(g => { if (g.bookNumber) s.add(String(g.bookNumber).padStart(4,"0")); });
+  return s;
 }
-
-// Attempt to fix a truncated game number from OCR.
-// e.g. "86" → "1086", "79" → "1079", "23" → "1023"
-// Strategy: try prepending "10", then "07", then padStart to 4 digits.
 function fixTruncatedGameNumber(raw) {
-  const digits = String(raw || "").replace(/\D/g, "").trim();
+  const digits = String(raw||"").replace(/\D/g,"").trim();
   if (!digits) return null;
-
-  const inventoryNumbers = buildInventoryGameNumberSet();
-
-  // Already a full 4-digit match
-  const padded = digits.padStart(4, "0");
-  if (inventoryNumbers.has(padded)) return padded;
-
-  // Try prepending "10" (most common Ohio prefix)
+  const inv = buildInventoryGameNumberSet();
+  const padded = digits.padStart(4,"0");
+  if (inv.has(padded)) return padded;
   if (digits.length <= 2) {
-    const with10 = "10" + digits.padStart(2, "0");
-    if (inventoryNumbers.has(with10)) return with10;
-    // Try "07" prefix (e.g. 0762)
-    const with07 = "07" + digits.padStart(2, "0");
-    if (inventoryNumbers.has(with07)) return with07;
+    const w10 = "10"+digits.padStart(2,"0"); if (inv.has(w10)) return w10;
+    const w07 = "07"+digits.padStart(2,"0"); if (inv.has(w07)) return w07;
   }
-
-  // Try prepending "10" for 3-digit numbers like "086" → "1086"
   if (digits.length === 3) {
-    const with1 = "1" + digits;
-    if (inventoryNumbers.has(with1)) return with1;
-    const with0 = "0" + digits;
-    if (inventoryNumbers.has(with0)) return with0;
+    const w1 = "1"+digits; if (inv.has(w1)) return w1;
+    const w0 = "0"+digits; if (inv.has(w0)) return w0;
   }
-
-  // Fall back to padded original
   return padded;
 }
-
 function normalizeManualInstantParsed(parsed = {}) {
   const totalsMap = {};
   const normalizedDate = normalizeParsedReportDate(parsed.reportDate || parsed.date || parsed.businessDate);
   const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
   sourceTotals.forEach((item) => {
-    const raw = String(item.gameNumber || "").trim();
-    const gameNumber = fixTruncatedGameNumber(raw);
+    const gameNumber = fixTruncatedGameNumber(String(item.gameNumber||"").trim());
     if (!gameNumber || gameNumber === "0000") return;
     totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(item.amount);
   });
@@ -2208,8 +2090,7 @@ function normalizeManualInstantParsed(parsed = {}) {
   if (!sourceTotals.length && Array.isArray(parsed.lines)) {
     parsed.lines.forEach((line) => {
       if (line.duplicate) return;
-      const raw = String(line.gameNumber || "").trim();
-      const gameNumber = fixTruncatedGameNumber(raw);
+      const gameNumber = fixTruncatedGameNumber(String(line.gameNumber||"").trim());
       if (!gameNumber || gameNumber === "0000") return;
       totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(line.amount);
     });
@@ -2785,18 +2666,14 @@ async function handleScanFiles(type, fileList) {
   if (!files.length) return;
 
   elements.scanReviewPanel.hidden = false;
-  elements.scanReviewTitle.textContent = `Compressing ${files.length > 1 ? files.length + " photos" : "photo"}...`;
+  elements.scanReviewTitle.textContent = "Compressing photo...";
   elements.scanReviewRows.innerHTML = "";
   elements.scanPhotoPreview.innerHTML = "";
-  elements.scanParserStatus.textContent = `Compressing ${files.length > 1 ? files.length + " photos" : "photo"}...`;
+  elements.scanParserStatus.textContent = "Compressing photo...";
 
-  // Compress all images in parallel — much faster for multi-page manual instant scans
-  let compressed;
-  try {
-    compressed = await Promise.all(files.map((file) => compressScanImage(file)));
-  } catch (err) {
-    elements.scanParserStatus.textContent = `Compression error: ${err.message || "Could not compress image"}`;
-    return;
+  const compressed = [];
+  for (const file of files) {
+    compressed.push(await compressScanImage(file));
   }
 
   if (type === "manual-instant" && scanDraft.type === "manual-instant" && !scanDraft.parsed) {
@@ -2858,7 +2735,6 @@ async function applySalesSummaryScan() {
     switchDate(targetDate);
   }
 
-  // Apply parsed values into till state
   const appliedTill = normalizeTill({
     ...state.till,
     grossSales: parsed.grossSales,
@@ -2873,21 +2749,17 @@ async function applySalesSummaryScan() {
   });
   state.till = appliedTill;
 
-  // Write to the day log — always, regardless of photo path
   const dayLog = previousDateDraft?.date === state.businessDate ? previousDateDraft.dayLog : getDayLog();
   dayLog.till = { ...appliedTill };
   dayLog.cashCounts = { ...state.cashCounts };
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   state.dailyLogs[state.businessDate] = cloneJson(dayLog);
-  state.lastSavedAt = dayLog.savedAt;
   previousDateDraft = null;
 
   state.scanRecords[state.businessDate] = state.scanRecords[state.businessDate] || [];
-  let statusMessage = `Sales Summary applied to ${state.businessDate}.`;
-
+  let photoUpload = { url: "", error: "" };
   if (scanDraft.reviewRecordDate && scanDraft.reviewRecordIndex !== undefined) {
-    // Reviewing a pending scan — update existing record
     const record = state.scanRecords[state.businessDate]?.[scanDraft.reviewRecordIndex];
     if (record) {
       record.status = "reviewed";
@@ -2896,9 +2768,8 @@ async function applySalesSummaryScan() {
       record.parsed = parsed;
       record.parsedReportDate = parsed.reportDate || record.parsedReportDate || "";
     }
-  } else if (scanDraft.files?.length) {
-    // Fresh scan — upload photo
-    const photoUpload = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
+  } else {
+    photoUpload = await uploadScanPhoto(scanDraft.files[0], state.businessDate);
     state.scanRecords[state.businessDate].push({
       type: scanDraft.type,
       status: "reviewed",
@@ -2917,23 +2788,20 @@ async function applySalesSummaryScan() {
         dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
       },
     });
-    if (photoUpload.error) statusMessage = `Sales Summary applied to ${state.businessDate} (photo upload failed: ${photoUpload.error})`;
   }
 
   persistState();
-  // Non-blocking cloud save — UI updates immediately
-  saveCloudState().catch((e) => console.warn("Cloud save after scan apply:", e));
-
+  await saveCloudState();
   (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
   scanDraft = { type: "", files: [], parsed: null };
   elements.salesSummaryScanInput.value = "";
-
-  // Always re-render with newly applied values
   renderCalendar();
   renderTillInputs();
   renderTotals();
   renderScanReview();
-  elements.scanParserStatus.textContent = statusMessage;
+  elements.scanParserStatus.textContent = photoUpload.error
+    ? `Sales Summary saved to ${state.businessDate}, but photo upload failed: ${photoUpload.error}`
+    : `Sales Summary saved to ${state.businessDate}.`;
 }
 
 async function applyManualInstantScan() {
@@ -2975,8 +2843,7 @@ async function applyManualInstantScan() {
   }
 
   persistState();
-  // Non-blocking cloud save
-  saveCloudState().catch((e) => console.warn("Cloud save after manual instant apply:", e));
+  await saveCloudState();
   scanDraft = { type: "", files: [], parsed: null };
   elements.manualInstantScanInput.value = "";
   reconcileVisible = true;
@@ -2985,12 +2852,7 @@ async function applyManualInstantScan() {
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
-  // Only flag a mismatch after manual instant has actually been entered
-  const anyManualEntered = inventory.some((game) => {
-    const v = getEntry(game).manualInstantSold;
-    return v !== "" && v !== undefined && v !== null;
-  });
-
+  const anyManualEntered = inventory.some(game => { const v = getEntry(game).manualInstantSold; return v !== "" && v !== undefined && v !== null; });
   const difference = manualInstant - instantSales;
   const isMismatch = anyManualEntered && Math.abs(difference) > 0.009;
   const isMatch = anyManualEntered && !isMismatch;
@@ -3019,16 +2881,14 @@ function renderReconciliationRows() {
     .map((game) => {
       const tickets = calculateTicketsSold(game);
       const autoSales = calculateGameSales(game);
-      // manualInstantSold is now stored as $$$ directly
-      const manual = normalizeNumber(getEntry(game).manualInstantSold);
       return {
         game,
         tickets,
         autoSales,
-        manual,
+        manual: normalizeNumber(getEntry(game).manualInstantSold),
       };
     })
-    .filter((row) => row.autoSales > 0 || row.manual > 0)
+    .filter((row) => row.autoSales > 0)
     .sort((a, b) => String(a.game.bookNumber || "").localeCompare(String(b.game.bookNumber || ""), undefined, { numeric: true }));
 
   if (!rows.length) {
@@ -3039,19 +2899,17 @@ function renderReconciliationRows() {
   elements.reconcileRows.innerHTML = rows
     .map(({ game, tickets, autoSales, manual }) => {
       const variance = manual - autoSales;
-      // Only highlight red if manual has been entered AND there's a mismatch
-      const hasManualEntry = getEntry(game).manualInstantSold !== "" && getEntry(game).manualInstantSold !== undefined;
-      const isMismatch = hasManualEntry && Math.abs(variance) > 0.009;
+      const hasManualEntry = getEntry(game).manualInstantSold !== '' && getEntry(game).manualInstantSold !== undefined;
       return `
-        <tr class="${isMismatch ? "reconcile-mismatch" : "reconcile-match"}">
+        <tr class="${Math.abs(variance) > 0.009 ? "reconcile-mismatch" : "reconcile-match"}">
           <td>${game.bookNumber || "-"}</td>
           <td>${game.box}</td>
           <td>${game.name || "-"}</td>
           <td>${formatGameValue(game)}</td>
           <td>${tickets}</td>
           <td>${currency.format(autoSales)}</td>
-          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" value="${getEntry(game).manualInstantSold !== "" ? normalizeNumber(getEntry(game).manualInstantSold).toFixed(2) : ""}" /></td>
-          <td class="${isMismatch ? "" : (hasManualEntry ? "reconcile-ok-cell" : "")}">${hasManualEntry ? currency.format(variance) : "-"}</td>
+          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" value="${getEntry(game).manualInstantSold !== '' ? normalizeNumber(getEntry(game).manualInstantSold).toFixed(2) : ''}" /></td>
+          <td class="${Math.abs(variance)>0.009 && hasManualEntry ? 'reconcile-mismatch-cell' : hasManualEntry ? 'reconcile-ok-cell' : ''}">${hasManualEntry ? currency.format(variance) : '-'}</td>
         </tr>
       `;
     })
@@ -3699,56 +3557,19 @@ function seedApril2026SheetData() {
   persistState();
 }
 
-function compareMonthMatrixRows(a, b, key) {
-  const direction = monthMatrixSort.direction === "asc" ? 1 : -1;
-  let left, right;
-  if (key === "box") { left = String(a.game.box); right = String(b.game.box); }
-  else if (key === "value") { left = normalizeNumber(a.game.value); right = normalizeNumber(b.game.value); }
-  else if (key === "bookNumber") { left = String(a.game.bookNumber || ""); right = String(b.game.bookNumber || ""); }
-  else if (key === "name") { left = String(a.game.name || ""); right = String(b.game.name || ""); }
-  else { left = String(a.game.box); right = String(b.game.box); }
-  if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
-  return String(left).localeCompare(String(right), undefined, { numeric: true }) * direction;
-}
-
 function renderMonthMatrix() {
   const dates = selectedMonthDates();
-
-  // Build game data with totals first so we can sort
-  const gameData = inventory
+  const visibleGames = inventory
     .filter((game) => game.value !== "")
     .filter((game) => summaryValueFilter === "all" || String(game.value) === summaryValueFilter)
-    .map((game) => {
-      let monthlyTickets = 0;
-      let monthlySales = 0;
-      const dayCells = dates.map((date) => {
-        if (isClosedDate(date)) return `<td class="closed-matrix-day"></td>`;
-        const entry = state.dailyLogs[date]?.entries[gameId(game)];
-        const ending = entry?.todayEnding ?? "";
-        const tickets = calculateTicketsSoldFromSavedEntry(game, date);
-        const sales = tickets * normalizeNumber(game.value);
-        monthlyTickets += tickets;
-        monthlySales += sales;
-        if (ending === "") return "<td>-</td>";
-        return `<td><span class="matrix-ending">${ending}</span><span class="matrix-sales">${Math.round(sales)}</span></td>`;
-      });
-      return { game, dayCells, monthlyTickets, monthlySales };
-    });
-
-  // Sort by monthMatrixSort
-  gameData.sort((a, b) => compareMonthMatrixRows(a, b, monthMatrixSort.key));
-
-  const sortArrow = (key) => {
-    if (monthMatrixSort.key !== key) return "";
-    return monthMatrixSort.direction === "asc" ? " ▲" : " ▼";
-  };
+    .sort((a, b) => normalizeNumber(a.value) - normalizeNumber(b.value) || String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
 
   elements.monthMatrixHead.innerHTML = `
     <tr>
-      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="box">Box${sortArrow("box")}</button></th>
-      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="value">$${sortArrow("value")}</button></th>
-      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="bookNumber">Book #${sortArrow("bookNumber")}</button></th>
-      <th><button type="button" class="sort-header matrix-sort-header" data-matrix-sort="name">Game${sortArrow("name")}</button></th>
+      <th>Box</th>
+      <th>Value</th>
+      <th>Book #</th>
+      <th>Game</th>
       ${dates
         .map((date) => {
           const day = new Date(`${date}T12:00:00`).getDate();
@@ -3760,28 +3581,46 @@ function renderMonthMatrix() {
       <th class="month-total-col">Books</th>
     </tr>
   `;
-
-  // Attach sort listeners
-  elements.monthMatrixHead.querySelectorAll("[data-matrix-sort]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.matrixSort;
-      const direction = monthMatrixSort.key === key && monthMatrixSort.direction === "asc" ? "desc" : "asc";
-      monthMatrixSort = { key, direction };
-      renderMonthMatrix();
-    });
-  });
-
   elements.monthMatrixRows.innerHTML = "";
 
-  gameData.forEach(({ game, dayCells, monthlyTickets, monthlySales }) => {
+  let currentValue = null;
+
+  visibleGames.forEach((game) => {
+    if (currentValue !== game.value) {
+      currentValue = game.value;
+      const groupRow = document.createElement("tr");
+      groupRow.className = "matrix-group-row";
+      groupRow.innerHTML = `<td colspan="${dates.length + 7}">${formatGameValue(game)} games</td>`;
+      elements.monthMatrixRows.appendChild(groupRow);
+    }
+
+    let monthlyTickets = 0;
+    let monthlySales = 0;
+    const dayCells = dates
+      .map((date) => {
+        if (isClosedDate(date)) return `<td class="closed-matrix-day"></td>`;
+
+        const entry = state.dailyLogs[date]?.entries[gameId(game)];
+        const ending = entry?.todayEnding ?? "";
+        const tickets = calculateTicketsSoldFromSavedEntry(game, date);
+        const sales = tickets * normalizeNumber(game.value);
+        monthlyTickets += tickets;
+        monthlySales += sales;
+
+        if (ending === "") return "<td>-</td>";
+        return `<td><span class="matrix-ending">${ending}</span><span class="matrix-sales">${Math.round(sales)}</span></td>`;
+      })
+      .join("");
+
     const row = document.createElement("tr");
     row.className = valueClass(game.value);
+    row.classList.toggle("dc-row", Boolean(state.orderDc[gameId(game)]));
     row.innerHTML = `
       <td>${game.box}</td>
       <td>${formatGameValue(game)}</td>
       <td>${game.bookNumber || "-"}</td>
       <td>${game.name || "-"}</td>
-      ${dayCells.join("")}
+      ${dayCells}
       <td>${monthlyTickets}</td>
       <td>${currency.format(monthlySales)}</td>
       <td>${calculateBooksSold(game, monthlyTickets).toFixed(2)}</td>
@@ -4145,13 +3984,11 @@ async function saveWeeklyOrder() {
   const ok = await showAppConfirm({
     eyebrow: "Complete order",
     title: "Complete & save this order?",
-    body: `${totalBooks} book${totalBooks === 1 ? "" : "s"} to order across ${snapshot.rows.filter(r => r.need > 0).length} game${snapshot.rows.filter(r => r.need > 0).length === 1 ? "" : "s"}. Order will be saved to completed records and QTY cleared for next week.`,
+    body: `${totalBooks} book${totalBooks===1?"":"s"} to order. Saves to completed records and clears QTY for next week.`,
     confirmText: "Complete order",
     cancelText: "Keep editing",
   });
   if (!ok) return;
-
-  // Auto-save directly into completed records in one step
   state.savedOrders = [snapshot, ...(state.savedOrders || [])].slice(0, 12);
   state.currentOrderPreview = snapshot;
   state.orderPreviewClearDate = nextWednesdayIso();
@@ -4161,14 +3998,7 @@ async function saveWeeklyOrder() {
   state.orderSettings.date = todayIso();
   elements.orderDate.value = state.orderSettings.date;
   persistState();
-  if (supabaseClient) saveCloudState();
-  elements.syncStatus.textContent = `Order completed by ${currentUserName()} — ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
-  await showAppNotice({
-    eyebrow: "Order saved",
-    title: "Order completed!",
-    body: `${totalBooks} book${totalBooks === 1 ? "" : "s"} recorded. QTY cleared for next order. Check Completed Order Records below.`,
-    confirmText: "OK",
-  });
+  elements.syncStatus.textContent = "Order completed and cleared";
   renderOrderSheet();
   renderSavedOrders();
 }
@@ -4352,34 +4182,15 @@ elements.editInventoryButton.addEventListener("click", () => {
 });
 elements.saveDayButton.addEventListener("click", saveDay);
 elements.exportButton.addEventListener("click", exportJson);
-
-// Search toggle
-const gameSearchToggle = document.querySelector("#gameSearchToggle");
-const gameSearchInput = document.querySelector("#gameSearchInput");
-if (gameSearchToggle && gameSearchInput) {
-  gameSearchToggle.addEventListener("click", () => {
-    const isHidden = gameSearchInput.hidden;
-    gameSearchInput.hidden = !isHidden;
-    if (!isHidden) {
-      gameSearchQuery = "";
-      gameSearchInput.value = "";
-      renderGames();
-    } else {
-      gameSearchInput.focus();
-    }
+const _gst = document.querySelector("#gameSearchToggle");
+const _gsi = document.querySelector("#gameSearchInput");
+if (_gst && _gsi) {
+  _gst.addEventListener("click", () => {
+    _gsi.hidden = !_gsi.hidden;
+    if (_gsi.hidden) { gameSearchQuery = ""; _gsi.value = ""; renderGames(); } else { _gsi.focus(); }
   });
-  gameSearchInput.addEventListener("input", (event) => {
-    gameSearchQuery = event.target.value.trim();
-    renderGames();
-  });
-  gameSearchInput.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      gameSearchQuery = "";
-      gameSearchInput.value = "";
-      gameSearchInput.hidden = true;
-      renderGames();
-    }
-  });
+  _gsi.addEventListener("input", e => { gameSearchQuery = e.target.value.trim(); renderGames(); });
+  _gsi.addEventListener("keydown", e => { if (e.key === "Escape") { gameSearchQuery = ""; _gsi.value = ""; _gsi.hidden = true; renderGames(); } });
 }
 elements.orderDate.value = state.orderSettings.date;
 elements.backstockWeeks.value = state.orderSettings.backstockWeeks;
