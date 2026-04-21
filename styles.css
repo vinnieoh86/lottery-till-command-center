@@ -2276,6 +2276,22 @@ pre {
   font-size: 0.7rem;
 }
 
+/* Manual sold $ cell — mismatch vs auto sales in daily entry table */
+.manual-mismatch-cell {
+  background: rgba(179, 58, 58, 0.08) !important;
+}
+
+.manual-mismatch-cell input {
+  border-color: rgba(179, 58, 58, 0.6) !important;
+  color: #7d1717 !important;
+  background: rgba(255, 232, 232, 0.9) !important;
+}
+
+.manual-match-cell input {
+  border-color: rgba(31, 122, 79, 0.4) !important;
+  background: rgba(230, 255, 224, 0.7) !important;
+}
+
 /* Reconcile match cell coloring */
 .reconcile-ok-cell {
   color: var(--green);
@@ -2344,10 +2360,85 @@ pre {
   }
 }
 
+/* Realtime push sync notification banner */
+.realtime-banner {
+  position: fixed;
+  bottom: 1.2rem;
+  left: 50%;
+  z-index: 300;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid rgba(31, 122, 79, 0.35);
+  border-radius: 999px;
+  padding: 0.6rem 0.9rem 0.6rem 1.1rem;
+  color: var(--coal);
+  background: rgba(255, 253, 240, 0.97);
+  box-shadow: 0 8px 32px rgba(31, 38, 34, 0.22);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  animation: bannerSlideUp 250ms ease;
+}
+
+.realtime-banner-review {
+  border-color: rgba(179, 58, 58, 0.55);
+  background: rgba(255, 240, 240, 0.98);
+  color: #7d1717;
+  box-shadow: 0 8px 32px rgba(179, 58, 58, 0.22);
+}
+
+.realtime-banner-sync {
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  color: #f7f1df;
+  background: var(--coal);
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.realtime-banner-review .realtime-banner-sync {
+  background: var(--red);
+}
+
+.realtime-banner-dismiss {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+
+.realtime-banner-dismiss:hover {
+  background: rgba(0,0,0,0.06);
+  box-shadow: none;
+  transform: none;
+}
+
+@keyframes bannerSlideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 @media (max-width: 760px) {
-  body {
-    padding-bottom: 5rem;
+  .realtime-banner {
+    bottom: 5.5rem;
+    left: 0.7rem;
+    right: 0.7rem;
+    transform: none;
+    border-radius: 1rem;
+    white-space: normal;
+    font-size: 0.82rem;
   }
+  @keyframes bannerSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}
+
 
   .shell {
     padding: 0.45rem;
@@ -2789,4 +2880,3 @@ pre {
     text-align: left;
   }
 }
-

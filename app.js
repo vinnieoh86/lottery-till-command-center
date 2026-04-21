@@ -651,7 +651,11 @@ function resetIdleTimer() {
   window.clearTimeout(idleLockTimer);
   if (!accessRole) return;
 
-  idleLockTimer = window.setTimeout(() => {
+  idleLockTimer = window.setTimeout(async () => {
+    // Pull latest cloud state before locking so nothing is lost
+    if (supabaseClient && !isApplyingCloudState) {
+      await loadCloudState();
+    }
     lockApp("Locked after 3 minutes idle.");
   }, IDLE_LOCK_MS);
 }
@@ -802,12 +806,13 @@ async function saveCloudState() {
     return;
   }
 
-  // Mark that WE are about to save — realtime callback will see this and skip
+  // Flag OUR save so realtime callback ignores the echo on this device only
   recentlySavedToCloud = true;
   window.clearTimeout(recentlySavedTimer);
+  // Reset flag after 1.5s — enough to ignore our own echo, short enough to not block remote updates
   recentlySavedTimer = window.setTimeout(() => {
     recentlySavedToCloud = false;
-  }, 5000);
+  }, 1500);
 
   setSyncStatus("Syncing cloud");
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
@@ -968,6 +973,11 @@ function subscribeToRealtimeSync() {
 
         if (newScanCount > previousScanCount && newPendingReview && isAdminRole()) {
           showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
+          // Auto-navigate to daily view and open scan review panel
+          setActiveView("daily");
+          const scanPanel = document.querySelector("#scanReviewPanel");
+          if (scanPanel) scanPanel.hidden = false;
+          renderScanReview();
         } else if (state.lastSavedAt !== previousLastSaved) {
           const savedBy = state.dailyLogs?.[todayIso()]?.completedBy ||
                           state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
@@ -1774,6 +1784,14 @@ function renderGames() {
     const manualValue = normalizeNumber(entry.manualInstantSold);
     const autoValue = calculateGameSales(game);
     const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
+    const manualMismatch = hasManual && Math.abs(manualValue - autoValue) > 0.009;
+
+    // Highlight the manual sold cell red if entered and doesn't match auto
+    const manualCell = row.querySelector("[data-field='manualInstantSold']")?.closest("td");
+    if (manualCell) {
+      manualCell.classList.toggle("manual-mismatch-cell", manualMismatch);
+      manualCell.classList.toggle("manual-match-cell", hasManual && !manualMismatch);
+    }
 
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
