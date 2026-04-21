@@ -2886,39 +2886,60 @@ pre {
   color: var(--green);
 }
 
-/* ── Fix 1: chip time in blue ── */
+
+/* ════════════════════════════════════════════════
+   SESSION FIXES — v20260421-4
+   ════════════════════════════════════════════════ */
+
+/* 1. Chip: name stays muted, time in blue */
 .chip-time {
   color: #2563eb;
   font-weight: 900;
 }
-
-/* ── Fix 2: table font bump + column width tightening ── */
-th,
-td {
-  font-size: 0.92rem !important;
+.cell-audit {
+  color: var(--muted);
 }
 
-th {
-  font-size: 0.67rem !important;
+/* 2. Daily entry table — uniform, readable columns */
+/* Base font bump */
+#daily-entry table th,
+#daily-entry table td {
+  font-size: 0.88rem;
+}
+#daily-entry table th {
+  font-size: 0.64rem;
 }
 
-/* Tighten Yesterday → right columns */
+/* Col widths — Box, Book#, Game, $ stay natural; right cols fixed */
+#daily-entry table {
+  min-width: 820px;
+  table-layout: fixed;
+  width: 100%;
+}
+#daily-entry th:nth-child(1),
+#daily-entry td:nth-child(1) { width: 2.2rem; }   /* Box */
+#daily-entry th:nth-child(2),
+#daily-entry td:nth-child(2) { width: 3.6rem; }   /* Book # */
+#daily-entry th:nth-child(3),
+#daily-entry td:nth-child(3) { width: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  /* Game — flex fills */
+#daily-entry th:nth-child(4),
+#daily-entry td:nth-child(4) { width: 3.2rem; }   /* $ */
 #daily-entry th:nth-child(5),
-#daily-entry td:nth-child(5) { width: 4.2rem; max-width: 4.2rem; }   /* Yesterday */
+#daily-entry td:nth-child(5) { width: 3.6rem; }   /* Yesterday */
 #daily-entry th:nth-child(6),
-#daily-entry td:nth-child(6) { width: 6rem;   max-width: 6rem; }     /* Today ending */
+#daily-entry td:nth-child(6) { width: 5.6rem; }   /* Today ending */
 #daily-entry th:nth-child(7),
-#daily-entry td:nth-child(7) { width: 4.2rem; max-width: 4.2rem; }   /* Tickets sold */
+#daily-entry td:nth-child(7) { width: 3.6rem; }   /* Tickets sold */
 #daily-entry th:nth-child(8),
-#daily-entry td:nth-child(8) { width: 5.5rem; max-width: 5.5rem; }   /* Auto sales */
+#daily-entry td:nth-child(8) { width: 5rem; }     /* Auto sales */
 #daily-entry th:nth-child(9),
-#daily-entry td:nth-child(9) { width: 6.2rem; max-width: 6.2rem; }   /* Manual sold */
+#daily-entry td:nth-child(9) { width: 6rem; }     /* Manual sold */
 #daily-entry th:nth-child(10),
-#daily-entry td:nth-child(10){ width: 4rem;   max-width: 4rem; }     /* Month tickets */
+#daily-entry td:nth-child(10){ width: 3.6rem; }   /* Month tickets */
 
-/* ── Fix 4: stronger red/green mismatch on manual sold ── */
+/* 4. Manual sold — red/green immediate feedback */
 .manual-mismatch-cell {
-  background: rgba(179,58,58,0.13) !important;
+  background: rgba(179,58,58,0.11) !important;
 }
 .manual-mismatch-cell input {
   border: 2px solid #b33a3a !important;
@@ -2927,11 +2948,77 @@ th {
   background: rgba(255,224,224,0.95) !important;
 }
 .manual-match-cell {
-  background: rgba(31,122,79,0.08) !important;
+  background: rgba(31,122,79,0.07) !important;
 }
 .manual-match-cell input {
-  border: 2px solid rgba(31,122,79,0.7) !important;
+  border: 2px solid rgba(31,122,79,0.65) !important;
   color: #145232 !important;
   font-weight: 900 !important;
-  background: rgba(220,255,234,0.9) !important;
+  background: rgba(218,255,230,0.9) !important;
+}
+
+/* Manual sold $ prefix wrap */
+.manual-dollar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+.manual-dollar-sign {
+  font-family: var(--numeric-font);
+  font-weight: 900;
+  font-size: 0.9rem;
+  color: var(--muted);
+  line-height: 1;
+  flex-shrink: 0;
+}
+.manual-instant-input {
+  font-weight: 900 !important;
+  font-size: 0.95rem !important;
+  width: 5rem !important;
+  min-width: 5rem !important;
+  text-align: right;
+}
+/* Hide $ sign when input is empty */
+.manual-dollar-wrap:has(input:placeholder-shown) .manual-dollar-sign {
+  visibility: hidden;
+}
+
+/* chip-time covers full badge text — override cell-audit base color */
+.cell-audit .chip-time {
+  color: #2563eb;
+  font-weight: 900;
+}
+
+/* Scan review toggle header */
+.scan-review-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.75rem;
+  cursor: pointer;
+  text-align: left;
+}
+.scan-review-toggle h3 {
+  font-size: 0.9rem;
+  margin: 0;
+}
+.scan-review-toggle .toggle-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: 0.5rem;
+}
+#scanReviewBody {
+  padding-top: 0.5rem;
+}
+.scan-review-footer {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
 }

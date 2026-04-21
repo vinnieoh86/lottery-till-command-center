@@ -1022,7 +1022,19 @@ function subscribeToRealtimeSync() {
           showRealtimeBanner("📋 New scan uploaded — needs your review!", true);
           setActiveView("daily");
           const scanPanel = document.querySelector("#scanReviewPanel");
-          if (scanPanel) scanPanel.hidden = false;
+          if (scanPanel) {
+            scanPanel.hidden = false;
+            const scanBody = document.getElementById("scanReviewBody");
+            const toggleBtn = scanPanel.querySelector(".scan-review-toggle");
+            if (scanBody && scanBody.hidden) {
+              scanBody.hidden = false;
+              if (toggleBtn) {
+                toggleBtn.setAttribute("aria-expanded", "true");
+                const label = toggleBtn.querySelector(".toggle-label");
+                if (label) label.textContent = "Hide";
+              }
+            }
+          }
           renderScanReview();
         } else if (state.lastSavedAt !== previousLastSaved) {
           const savedBy = state.dailyLogs?.[todayIso()]?.completedBy || state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
@@ -1752,13 +1764,15 @@ function renderGames() {
   // FIX 8: mark section so CSS can show the lock indicator
   elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
 
-  // Fix 4: Update column header timestamps for today ending and manual sold
+  // Update column header timestamps — only show if explicitly typed on a non-blank cell
   const dayEntries = Object.values(state.dailyLogs[state.businessDate]?.entries || {});
   const latestEndingTs = dayEntries.reduce((best, e) => {
-    const ts = e.todayEndingUpdatedAt || e.updatedAt || "";
+    if (e.todayEnding === "" || e.todayEnding === undefined) return best;
+    const ts = e.todayEndingUpdatedAt || "";
     return ts > best ? ts : best;
   }, "");
   const latestManualTs = dayEntries.reduce((best, e) => {
+    if (e.manualInstantSold === "" || e.manualInstantSold === undefined) return best;
     const ts = e.manualInstantUpdatedAt || "";
     return ts > best ? ts : best;
   }, "");
@@ -1811,16 +1825,20 @@ function renderGames() {
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
     const endingChip = row.querySelector(".ending-chip");
     if (endingChip) {
-      const endingBy = entry.todayEndingUpdatedBy || entry.updatedBy || entry.endingCompletedBy || entry.completedBy || "";
-      const endingAt = entry.todayEndingUpdatedAt || entry.updatedAt || entry.endingCompletedAt || entry.completedAt || "";
+      // Only show timestamp if the cell actually has a value — never show on blank cells
+      const hasEndingValue = entry.todayEnding !== "" && entry.todayEnding !== undefined;
+      const endingBy = hasEndingValue ? (entry.todayEndingUpdatedBy || "") : "";
+      const endingAt = hasEndingValue ? (entry.todayEndingUpdatedAt || "") : "";
       endingChip.innerHTML = formatAuditBadge(endingBy, endingAt);
       endingChip.title = endingAt ? `Ending updated ${new Date(endingAt).toLocaleString()} by ${endingBy || "unknown"}` : "Ending not updated yet";
       endingChip.classList.toggle("edited-chip", Boolean(endingBy));
     }
     const manualChip = row.querySelector(".manual-chip");
     if (manualChip) {
-      const manualBy = entry.manualInstantUpdatedBy || "";
-      const manualAt = entry.manualInstantUpdatedAt || "";
+      // Only show timestamp if manual sold actually has a value
+      const hasManualValue = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
+      const manualBy = hasManualValue ? (entry.manualInstantUpdatedBy || "") : "";
+      const manualAt = hasManualValue ? (entry.manualInstantUpdatedAt || "") : "";
       manualChip.innerHTML = formatAuditBadge(manualBy, manualAt);
       manualChip.title = manualAt ? `Manual sold updated ${new Date(manualAt).toLocaleString()} by ${manualBy || "unknown"}` : "Manual sold not updated yet";
       manualChip.classList.toggle("edited-chip", Boolean(manualBy));
@@ -2342,7 +2360,13 @@ function renderScanReview() {
   elements.scanSalesSummaryButton.disabled = isClosed;
   elements.scanManualInstantButton.disabled = isClosed;
   const userUploadOnly = isUserRole();
-  elements.scanReviewPanel.hidden = userUploadOnly ? !files.length : !files.length && !savedRecords.length;
+  const hasContent = files.length || savedRecords.length;
+  // Show the panel container when there's content, but never auto-expand the body
+  elements.scanReviewPanel.hidden = !hasContent;
+  // Update the toggle button label to reflect content count
+  const toggleBtn = elements.scanReviewPanel.querySelector(".scan-review-toggle");
+  const scanBody = document.getElementById("scanReviewBody");
+  const isExpanded = toggleBtn ? toggleBtn.getAttribute("aria-expanded") === "true" : false;
   elements.scanReviewTitle.textContent = files.length
     ? `${scanTypeLabel(scanDraft.type)} - ${files.length} photo${files.length === 1 ? "" : "s"} ready`
     : savedRecords.length
@@ -2835,6 +2859,17 @@ async function handleScanFiles(type, fileList) {
   if (!files.length) return;
 
   elements.scanReviewPanel.hidden = false;
+  // Auto-expand the scan body when user actively uploads
+  const scanBody = document.getElementById("scanReviewBody");
+  const toggleBtn = elements.scanReviewPanel.querySelector(".scan-review-toggle");
+  if (scanBody && scanBody.hidden) {
+    scanBody.hidden = false;
+    if (toggleBtn) {
+      toggleBtn.setAttribute("aria-expanded", "true");
+      const label = toggleBtn.querySelector(".toggle-label");
+      if (label) label.textContent = "Hide";
+    }
+  }
   elements.scanReviewTitle.textContent = "Compressing photo...";
   elements.scanReviewRows.innerHTML = "";
   elements.scanPhotoPreview.innerHTML = "";
@@ -3114,16 +3149,26 @@ function updateEntry(game, key, value, row) {
   const changed = String(entry[key] ?? "") !== String(nextValue);
   entry[key] = nextValue;
   if (changed && key === "todayEnding") {
-    entry.todayEndingUpdatedBy = currentUserName();
-    entry.todayEndingUpdatedAt = new Date().toISOString();
-    entry.updatedBy = entry.todayEndingUpdatedBy;
-    entry.updatedAt = entry.todayEndingUpdatedAt;
+    if (nextValue !== "") {
+      entry.todayEndingUpdatedBy = currentUserName();
+      entry.todayEndingUpdatedAt = new Date().toISOString();
+      entry.updatedBy = entry.todayEndingUpdatedBy;
+      entry.updatedAt = entry.todayEndingUpdatedAt;
+    } else {
+      entry.todayEndingUpdatedBy = "";
+      entry.todayEndingUpdatedAt = "";
+    }
   }
   if (changed && key === "manualInstantSold") {
-    entry.manualInstantUpdatedBy = currentUserName();
-    entry.manualInstantUpdatedAt = new Date().toISOString();
-    entry.updatedBy = entry.manualInstantUpdatedBy;
-    entry.updatedAt = entry.manualInstantUpdatedAt;
+    if (nextValue !== "") {
+      entry.manualInstantUpdatedBy = currentUserName();
+      entry.manualInstantUpdatedAt = new Date().toISOString();
+      entry.updatedBy = entry.manualInstantUpdatedBy;
+      entry.updatedAt = entry.manualInstantUpdatedAt;
+    } else {
+      entry.manualInstantUpdatedBy = "";
+      entry.manualInstantUpdatedAt = "";
+    }
   }
 
   row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
@@ -3562,6 +3607,22 @@ function setupSectionToggles() {
       toggle.querySelector(".toggle-label").textContent = isCollapsed ? "Minimize" : "Maximize";
     });
   });
+
+  // Scan review toggle lives inside a hidden panel so isn't in the static NodeList above —
+  // use event delegation so it works whenever the panel becomes visible.
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest(".scan-review-toggle");
+    if (!btn) return;
+    const targetId = btn.dataset.toggleTarget;
+    if (!targetId) return;
+    const body = document.getElementById(targetId);
+    if (!body) return;
+    const isCollapsed = body.hidden;
+    body.hidden = !isCollapsed;
+    btn.setAttribute("aria-expanded", String(isCollapsed));
+    const label = btn.querySelector(".toggle-label");
+    if (label) label.textContent = isCollapsed ? "Hide" : "Show";
+  });
 }
 
 function setActiveView(view, shouldScroll = false) {
@@ -3635,11 +3696,12 @@ async function clearEntryColumn(column) {
   Object.values(dayLog.entries || {}).forEach((entry) => {
     entry[column] = "";
     if (isManual) {
-      entry.manualInstantUpdatedBy = currentUserName();
-      entry.manualInstantUpdatedAt = now;
+      entry.manualInstantUpdatedBy = "";
+      entry.manualInstantUpdatedAt = "";
     } else {
-      entry.todayEndingUpdatedBy = currentUserName();
-      entry.todayEndingUpdatedAt = now;
+      // Clear the timestamp too — don't stamp cleared cells
+      entry.todayEndingUpdatedBy = "";
+      entry.todayEndingUpdatedAt = "";
       // Also clear per-entry ending lock fields
       entry.endingCompletedBy = "";
       entry.endingCompletedAt = null;
