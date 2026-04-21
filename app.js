@@ -427,6 +427,7 @@ function normalizeStoredState(parsed = {}) {
     scanRecords: parsed.scanRecords || {},
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
+    _ownSaveTimestamp: parsed._ownSaveTimestamp || "",
   };
 }
 
@@ -798,13 +799,15 @@ async function saveCloudState() {
   // Flag our own save so realtime callback ignores the echo
   recentlySavedToCloud = true;
   window.clearTimeout(recentlySavedTimer);
-  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 1500);
-  setSyncStatus("Syncing cloud");
+  // Use 6s window — realtime can lag on slow connections
+  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 6000);
+  setSyncStatus("Syncing cloud…");
+  const saveTimestamp = new Date().toISOString();
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
     {
       store_key: CLOUD_STORE_KEY,
-      state: getSerializableState(),
-      updated_at: new Date().toISOString(),
+      state: { ...getSerializableState(), _ownSaveTimestamp: saveTimestamp },
+      updated_at: saveTimestamp,
     },
     { onConflict: "store_key" },
   );
@@ -895,7 +898,11 @@ function subscribeToRealtimeSync() {
     .channel("app-state-changes")
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "app_state_snapshots", filter: `store_key=eq.${CLOUD_STORE_KEY}` },
       async (payload) => {
-        if (isApplyingCloudState || recentlySavedToCloud) return;
+        // Ignore echo if we just saved, or if payload matches our own save timestamp
+        const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
+        const isOwnEcho = recentlySavedToCloud ||
+          (payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp);
+        if (isApplyingCloudState || isOwnEcho) return;
         const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
         const previousLastSaved = state.lastSavedAt;
         await loadCloudState();
@@ -1631,6 +1638,8 @@ function renderGames() {
   const isLocked = isActiveDayLockedForRole();
   elements.closedDayNotice.hidden = !isClosed;
   elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
+  // FIX 8: mark section so CSS can show the lock indicator
+  elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
 
   inventory.forEach((game, rowIndex) => {
     if (gameSearchQuery) {
@@ -1665,7 +1674,8 @@ function renderGames() {
         field.textContent = key === "value" ? formatGameValue(game) : game[key] || "-";
       }
     });
-    // dc-row not applied in daily entry view
+    // Apply dc-row in ALL views including daily entry
+    row.classList.toggle("dc-row", Boolean(state.orderDc[gameId(game)]));
     row.querySelector("[data-output='previousEnding']").textContent = getPreviousEnding(game);
     row.querySelector("[data-field='todayEnding']").value = entry.todayEnding;
     const _mv = entry.manualInstantSold; row.querySelector("[data-field='manualInstantSold']").value = _mv !== '' && _mv !== undefined ? normalizeNumber(_mv).toFixed(2) : '';
@@ -1704,6 +1714,12 @@ function renderGames() {
         (isUserRole() && field.dataset.field === "todayEnding" && isEndingCompleted()) ||
         (isUserRole() && field.dataset.field !== "todayEnding") ||
         (isUserRole() && !isTodayDate());
+      // Admin sees endings as soft-locked: not disabled (can still read/interact) but a warning fires on focus
+      if (isAdminRole() && field.dataset.field === "todayEnding" && isEndingCompleted()) {
+        field.classList.add("ending-locked-field");
+      } else {
+        field.classList.remove("ending-locked-field");
+      }
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
@@ -1712,6 +1728,18 @@ function renderGames() {
         if (field.dataset.field === "todayEnding") {
           activeMobileGameIndex = rowIndex;
           renderMobileEntryBar();
+        }
+        // FIX 8: warn on ANY touch of todayEnding when ending is locked (both roles)
+        if (field.dataset.field === "todayEnding" && isEndingCompleted() && !field._endingWarnShown) {
+          field._endingWarnShown = true;
+          field.blur();
+          showAppConfirm({
+            eyebrow: "⚠️ Endings locked",
+            title: "All endings are complete",
+            body: `All today's ending counts are locked for ${state.businessDate}. To change a value, use "Clear endings" from the sidebar (admin only).`,
+            confirmText: "OK",
+            cancelText: "",
+          }).then(() => { field._endingWarnShown = false; });
         }
       });
       field.addEventListener("change", async () => {
@@ -2319,9 +2347,13 @@ function renderScanReview() {
   });
 
   const manualBatchWaiting = scanDraft.type === "manual-instant" && files.length && !scanDraft.parsed;
+  // Also allow re-parsing sales summary if files are loaded but not yet parsed
+  const salesSummaryWaiting = scanDraft.type === "sales-summary" && files.length && !scanDraft.parsed;
+  const parseButtonVisible = manualBatchWaiting || salesSummaryWaiting;
   elements.addScanPageButton.hidden = !manualBatchWaiting;
-  elements.parseScanPagesButton.hidden = !manualBatchWaiting;
-  elements.parseScanPagesButton.disabled = isClosed || !manualBatchWaiting;
+  elements.parseScanPagesButton.hidden = !parseButtonVisible;
+  elements.parseScanPagesButton.disabled = isClosed || !parseButtonVisible;
+  elements.parseScanPagesButton.textContent = salesSummaryWaiting ? "Parse sales summary" : "Parse pages";
   elements.applyScanButton.hidden = userUploadOnly;
   elements.applyScanButton.disabled = isClosed || !scanDraft.parsed;
   elements.scanParserStatus.textContent = scanDraft.parsed
@@ -2330,9 +2362,11 @@ function renderScanReview() {
       : "Parsed values ready. Review before submitting."
     : isClosed
       ? "Closed day locked. Scanning is disabled for Sundays."
-      : manualBatchWaiting
-        ? `Added ${files.length} ticket page${files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`
-        : "Parser not connected yet. Photos are compressed and ready for OCR wiring.";
+      : salesSummaryWaiting
+        ? "Photo ready. Tap \"Parse sales summary\" to extract totals."
+        : manualBatchWaiting
+          ? `Added ${files.length} ticket page${files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`
+          : "Photos are compressed and ready to parse.";
 }
 
 async function parseSalesSummaryScan() {
@@ -3381,17 +3415,34 @@ function setActiveView(view, shouldScroll = false) {
     section.classList.toggle("view-hidden", !views.includes(view));
   });
 
-  if (shouldScroll) {
+  // On mobile, always scroll to the active section and ensure daily entry is expanded
+  const isMobile = window.matchMedia("(max-width: 760px)").matches;
+  if (shouldScroll || isMobile) {
     const targetMap = {
       daily: elements.dailyEntrySection,
       till: elements.tillSection,
-    history: document.querySelector("#history"),
-    month: document.querySelector("#month-analysis"),
-    order: document.querySelector("#order-sheet"),
-    reports: document.querySelector("#manager-reports"),
-  };
+      history: document.querySelector("#history"),
+      month: document.querySelector("#month-analysis"),
+      order: document.querySelector("#order-sheet"),
+      reports: document.querySelector("#manager-reports"),
+    };
     const target = targetMap[view];
-    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (target) {
+      // On mobile, ensure the panel body is expanded before scrolling
+      if (isMobile && view === "daily") {
+        const body = document.querySelector("#daily-entry-body");
+        const toggle = document.querySelector("[data-toggle-target='daily-entry-body']");
+        if (body && body.hidden) {
+          body.hidden = false;
+          if (toggle) {
+            toggle.setAttribute("aria-expanded", "true");
+            const label = toggle.querySelector(".toggle-label");
+            if (label) label.textContent = "Minimize";
+          }
+        }
+      }
+      window.setTimeout(() => target.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+    }
   }
 
   renderMobileEntryBar();
@@ -3399,36 +3450,49 @@ function setActiveView(view, shouldScroll = false) {
 
 async function clearEntryColumn(column) {
   const isManual = column === "manualInstantSold";
+  const dateLabel = new Date(`${state.businessDate}T12:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   const ok = await showAppConfirm({
-    eyebrow: "Clear daily column",
-    title: isManual ? "Clear all manual instant sold values?" : "Clear all ending ticket numbers?",
-    body: `This clears the ${isManual ? "Manual Instant Sold" : "Today Ending #"} column for ${state.businessDate}. Other columns stay untouched.`,
-    confirmText: isManual ? "Clear manual" : "Clear endings",
+    eyebrow: "⚠️ Confirm clear",
+    title: isManual ? "Clear ALL manual instant sold?" : "Clear ALL today ending numbers?",
+    body: isManual
+      ? `This will wipe every Manual Sold entry for ${dateLabel}. The Today Ending column is untouched. This cannot be undone.`
+      : `This will wipe every Today Ending # for ${dateLabel}. All other columns stay untouched. This cannot be undone.`,
+    confirmText: isManual ? "Yes, clear manual" : "Yes, clear endings",
     cancelText: "Cancel",
   });
   if (!ok) return;
 
   const dayLog = getDayLog();
+  const now = new Date().toISOString();
   Object.values(dayLog.entries || {}).forEach((entry) => {
     entry[column] = "";
     if (isManual) {
       entry.manualInstantUpdatedBy = currentUserName();
-      entry.manualInstantUpdatedAt = new Date().toISOString();
+      entry.manualInstantUpdatedAt = now;
     } else {
       entry.todayEndingUpdatedBy = currentUserName();
-      entry.todayEndingUpdatedAt = new Date().toISOString();
+      entry.todayEndingUpdatedAt = now;
+      // Also clear per-entry ending lock fields
+      entry.endingCompletedBy = "";
+      entry.endingCompletedAt = null;
     }
   });
   dayLog.totals = buildTotals();
-  dayLog.savedAt = new Date().toISOString();
+  dayLog.savedAt = now;
   dayLog.completedAt = null;
   dayLog.completedBy = "";
+  if (!isManual) {
+    // Reset ending-level lock so entries can be re-entered
+    dayLog.endingCompletedAt = null;
+    dayLog.endingCompletedBy = "";
+  }
   state.lastSavedAt = dayLog.savedAt;
   persistState();
   await saveCloudState();
   hydrateActiveDay();
   render();
   setActiveView(activeView);
+  elements.syncStatus.textContent = isManual ? "Manual sold cleared" : "Ending numbers cleared";
 }
 
 function seedApril2026SheetData() {
@@ -4242,7 +4306,11 @@ elements.addScanPageButton.addEventListener("click", () => {
   elements.manualInstantScanInput.click();
 });
 elements.parseScanPagesButton.addEventListener("click", () => {
-  parseManualInstantScan();
+  if (scanDraft.type === "sales-summary") {
+    parseSalesSummaryScan();
+  } else {
+    parseManualInstantScan();
+  }
 });
 elements.clearScanReviewButton.addEventListener("click", clearScanReview);
 elements.applyScanButton.addEventListener("click", () => {
