@@ -803,14 +803,9 @@ async function saveCloudState() {
     if (!supabaseClient) setSyncStatus("Supabase offline");
     return;
   }
-  // Flag our own save so realtime callback ignores the echo
-  recentlySavedToCloud = true;
-  window.clearTimeout(recentlySavedTimer);
-  // Use 8s window — realtime can lag on slow connections
-  recentlySavedTimer = window.setTimeout(() => { recentlySavedToCloud = false; }, 8000);
   setSyncStatus("Syncing cloud…");
   const saveTimestamp = new Date().toISOString();
-  // CRITICAL: store in state so the realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
+  // Store in state so realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
   state._ownSaveTimestamp = saveTimestamp;
   const { error } = await supabaseClient.from("app_state_snapshots").upsert(
     {
@@ -823,7 +818,6 @@ async function saveCloudState() {
 
   if (error) {
     setSyncStatus(`Sync error: ${error.message}`);
-    recentlySavedToCloud = false;
     return;
   }
   setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
@@ -1008,10 +1002,10 @@ function subscribeToRealtimeSync() {
     .channel("app-state-changes")
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "app_state_snapshots", filter: `store_key=eq.${CLOUD_STORE_KEY}` },
       async (payload) => {
-        // Ignore echo if we just saved, or if payload matches our own save timestamp
+        // Echo suppression: ONLY suppress if payload timestamp exactly matches what THIS
+        // device wrote. The old recentlySavedToCloud 8s window blocked other devices' changes.
         const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
-        const isOwnEcho = recentlySavedToCloud ||
-          (payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp);
+        const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
         if (isApplyingCloudState || isOwnEcho) return;
         const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
         const previousLastSaved = state.lastSavedAt;
@@ -3176,13 +3170,21 @@ function updateEntry(game, key, value, row) {
   row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
   const endingChip = row.querySelector(".ending-chip");
   if (endingChip) {
-    endingChip.innerHTML = formatAuditBadge(entry.todayEndingUpdatedBy || entry.updatedBy, entry.todayEndingUpdatedAt || entry.updatedAt);
-    endingChip.classList.toggle("edited-chip", Boolean(entry.todayEndingUpdatedBy || entry.updatedBy));
+    const hasEndingValue = entry.todayEnding !== "" && entry.todayEnding !== undefined;
+    endingChip.innerHTML = formatAuditBadge(
+      hasEndingValue ? (entry.todayEndingUpdatedBy || "") : "",
+      hasEndingValue ? (entry.todayEndingUpdatedAt || "") : ""
+    );
+    endingChip.classList.toggle("edited-chip", hasEndingValue && Boolean(entry.todayEndingUpdatedBy));
   }
   const manualChip = row.querySelector(".manual-chip");
   if (manualChip) {
-    manualChip.innerHTML = formatAuditBadge(entry.manualInstantUpdatedBy, entry.manualInstantUpdatedAt);
-    manualChip.classList.toggle("edited-chip", Boolean(entry.manualInstantUpdatedBy));
+    const hasManualValue = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
+    manualChip.innerHTML = formatAuditBadge(
+      hasManualValue ? (entry.manualInstantUpdatedBy || "") : "",
+      hasManualValue ? (entry.manualInstantUpdatedAt || "") : ""
+    );
+    manualChip.classList.toggle("edited-chip", hasManualValue && Boolean(entry.manualInstantUpdatedBy));
   }
 
   // Fix 4: update red/green mismatch immediately without waiting for renderGames
@@ -3598,7 +3600,10 @@ function updateSortHeaderState() {
 }
 
 function setupSectionToggles() {
+  // Only handle buttons that explicitly have the section-toggle class —
+  // NOT the scan-review-toggle which uses its own delegated handler below.
   elements.sectionToggles.forEach((toggle) => {
+    if (!toggle.classList.contains("section-toggle")) return;
     toggle.addEventListener("click", () => {
       const panelBody = document.querySelector(`#${toggle.dataset.toggleTarget}`);
       const isCollapsed = panelBody.hidden;
@@ -3608,8 +3613,7 @@ function setupSectionToggles() {
     });
   });
 
-  // Scan review toggle lives inside a hidden panel so isn't in the static NodeList above —
-  // use event delegation so it works whenever the panel becomes visible.
+  // Scan review toggle — delegated so it works after panel becomes visible.
   document.addEventListener("click", (event) => {
     const btn = event.target.closest(".scan-review-toggle");
     if (!btn) return;
