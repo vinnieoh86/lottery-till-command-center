@@ -317,6 +317,8 @@ let recentlySavedToCloud = false;
 let recentlySavedTimer = null;
 let realtimeChannel = null;
 let realtimeNotifyBanner = null;
+let cloudPollTimer = null;
+let lastLoadedCloudUpdatedAt = "";
 let summaryValueFilter = "all";
 let summarySort = { key: "booksSold", direction: "desc" };
 let managerReportRange = "month";
@@ -798,6 +800,22 @@ function scheduleCloudSave() {
   }, 600);
 }
 
+function ensureCloudPolling() {
+  if (!supabaseClient || cloudPollTimer) return;
+  cloudPollTimer = window.setInterval(async () => {
+    if (document.hidden || isApplyingCloudState || !supabaseClient) return;
+    await loadCloudState({ quietIfUnchanged: true });
+  }, 2000);
+}
+
+function refreshCloudPolling() {
+  if (cloudPollTimer) {
+    window.clearInterval(cloudPollTimer);
+    cloudPollTimer = null;
+  }
+  ensureCloudPolling();
+}
+
 async function saveCloudState() {
   if (!supabaseClient || isApplyingCloudState) {
     if (!supabaseClient) setSyncStatus("Supabase offline");
@@ -820,10 +838,12 @@ async function saveCloudState() {
     setSyncStatus(`Sync error: ${error.message}`);
     return;
   }
+  lastLoadedCloudUpdatedAt = saveTimestamp;
   setSyncStatus(`Cloud synced ${new Date().toLocaleTimeString()}`);
 }
 
-async function loadCloudState() {
+async function loadCloudState(options = {}) {
+  const quietIfUnchanged = Boolean(options.quietIfUnchanged);
   if (!supabaseClient) {
     setSyncStatus("Supabase offline");
     return;
@@ -843,6 +863,10 @@ async function loadCloudState() {
 
   if (!data?.state) {
     await saveCloudState();
+    return;
+  }
+
+  if (quietIfUnchanged && data.updated_at && data.updated_at === lastLoadedCloudUpdatedAt) {
     return;
   }
 
@@ -945,6 +969,7 @@ async function loadCloudState() {
       till: mergedTill,
       businessDate: activeDate,
     });
+    lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     inventory = state.inventory || inventory;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     hydrateActiveDay();
@@ -993,6 +1018,39 @@ function showRealtimeBanner(message, isReview = false) {
   });
   if (!isReview) {
     window.setTimeout(() => { if (realtimeNotifyBanner === banner) { banner.remove(); realtimeNotifyBanner = null; } }, 8000);
+  }
+}
+
+async function handleIncomingCloudChange(payload) {
+  const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
+  const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
+  if (isApplyingCloudState || isOwnEcho) return;
+  const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
+  const previousLastSaved = state.lastSavedAt;
+  await loadCloudState({ quietIfUnchanged: true });
+  const newScanCount = (state.scanRecords?.[todayIso()] || []).length;
+  const newPendingReview = (state.scanRecords?.[todayIso()] || []).some(r => r.status === "pending-review");
+  if (newScanCount > previousScanCount && newPendingReview && isAdminRole()) {
+    showRealtimeBanner("New scan uploaded - needs your review!", true);
+    setActiveView("daily");
+    const scanPanel = document.querySelector("#scanReviewPanel");
+    if (scanPanel) {
+      scanPanel.hidden = false;
+      const scanBody = document.getElementById("scanReviewBody");
+      const toggleBtn = scanPanel.querySelector(".scan-review-toggle");
+      if (scanBody && scanBody.hidden) {
+        scanBody.hidden = false;
+        if (toggleBtn) {
+          toggleBtn.setAttribute("aria-expanded", "true");
+          const label = toggleBtn.querySelector(".toggle-label");
+          if (label) label.textContent = "Hide";
+        }
+      }
+    }
+    renderScanReview();
+  } else if (state.lastSavedAt !== previousLastSaved) {
+    const savedBy = state.dailyLogs?.[todayIso()]?.completedBy || state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
+    showRealtimeBanner(`Synced from ${savedBy}`);
   }
 }
 
@@ -1045,11 +1103,29 @@ function subscribeToRealtimeSync() {
     });
 }
 
+function subscribeToRealtimeSync() {
+  if (!supabaseClient || realtimeChannel) return;
+  realtimeChannel = supabaseClient
+    .channel("app-state-changes")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "app_state_snapshots", filter: `store_key=eq.${CLOUD_STORE_KEY}` }, handleIncomingCloudChange)
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "app_state_snapshots", filter: `store_key=eq.${CLOUD_STORE_KEY}` }, handleIncomingCloudChange)
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        setSyncStatus("Live sync active");
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setSyncStatus("Live sync error - using 2s cloud refresh");
+        realtimeChannel = null;
+        window.setTimeout(subscribeToRealtimeSync, 15000);
+      }
+    });
+}
+
 async function initCloudSync() {
   renderAuthState();
   if (!supabaseClient) return;
   await loadCloudState();
   subscribeToRealtimeSync();
+  ensureCloudPolling();
 }
 
 function normalizeNumber(value) {
@@ -2920,14 +2996,18 @@ async function handleScanFiles(type, fileList) {
   }
 }
 
-function clearScanReview(force = false) {
+function clearScanReview(options = {}) {
   return (async () => {
-    const hasReviewContent = Boolean(scanDraft.type || scanDraft.files?.length || scanDraft.parsed);
-    if (hasReviewContent && !force) {
+    const normalizedOptions = typeof options === "boolean"
+      ? { skipConfirm: options, clearSavedRecords: false }
+      : { skipConfirm: false, clearSavedRecords: true, ...options };
+    const savedRecords = state.scanRecords?.[state.businessDate] || [];
+    const hasReviewContent = Boolean(scanDraft.type || scanDraft.files?.length || scanDraft.parsed || savedRecords.length);
+    if (hasReviewContent && !normalizedOptions.skipConfirm) {
       const ok = await showAppConfirm({
         eyebrow: "Clear review",
         title: "Clear all Reviews",
-        body: "This removes the current review photos and parsed values from this device. Saved review history stays in History unless you submit new changes.",
+        body: `This clears the current review draft and removes all saved sales-summary and instant-sold review entries for ${state.businessDate}. This syncs to the other devices too.`,
         confirmText: "Yes, clear all",
         cancelText: "No",
       });
@@ -2938,6 +3018,12 @@ function clearScanReview(force = false) {
     scanDraft = { type: "", files: [], parsed: null };
     elements.salesSummaryScanInput.value = "";
     elements.manualInstantScanInput.value = "";
+    if (normalizedOptions.clearSavedRecords && savedRecords.length) {
+      delete state.scanRecords[state.businessDate];
+      persistState();
+      await saveCloudState();
+      renderCalendar();
+    }
     renderScanReview();
     return true;
   })();
@@ -4691,6 +4777,17 @@ document.addEventListener("keydown", (event) => {
   event.target.dispatchEvent(new Event("input", { bubbles: true }));
   event.target.dispatchEvent(new Event("change", { bubbles: true }));
   event.target.blur();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && supabaseClient) {
+    refreshCloudPolling();
+    loadCloudState({ quietIfUnchanged: true });
+  }
+});
+window.addEventListener("focus", () => {
+  if (!supabaseClient) return;
+  refreshCloudPolling();
+  loadCloudState({ quietIfUnchanged: true });
 });
 setupSectionToggles();
 
