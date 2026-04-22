@@ -253,6 +253,7 @@ const elements = {
   savedOrderRows: document.querySelector("#savedOrderRows"),
   clearEndingButton: document.querySelector("#clearEndingButton"),
   clearManualButton: document.querySelector("#clearManualButton"),
+  editDayButton: document.querySelector("#editDayButton"),
   authEmail: document.querySelector("#authEmail"),
   authPassword: document.querySelector("#authPassword"),
   authActions: document.querySelector("#authActions"),
@@ -342,6 +343,7 @@ let idleLockTimer = null;
 let activeMobileGameIndex = 0;
 let previousDateDraft = null;
 let suppressNextMobileAutoAdvance = false;
+let endingEditModeDate = "";
 
 function todayIso() {
   const today = new Date();
@@ -1012,6 +1014,7 @@ async function loadCloudState(options = {}) {
       return localSaved >= cloudSaved ? state.till : (cloudState.till || state.till);
     })();
 
+    const focusState = captureInputFocusState();
     state = normalizeStoredState({
       ...cloudState,
       dailyLogs: mergedDailyLogs,
@@ -1025,6 +1028,7 @@ async function loadCloudState(options = {}) {
     render();
     renderTillInputs();
     setActiveView(activeView);
+    restoreInputFocusState(focusState);
     setSyncStatus(`Cloud synced ${new Date(data.updated_at).toLocaleTimeString()}`);
   } catch(e) {
     setSyncStatus(`Apply error: ${e.message || "Could not apply"}`);
@@ -1550,6 +1554,26 @@ function isEndingCompleted(date = state.businessDate) {
   return Boolean(state.dailyLogs[date]?.endingCompletedAt);
 }
 
+function isEndingEditMode(date = state.businessDate) {
+  return endingEditModeDate === date;
+}
+
+function toggleEditDayMode() {
+  if (!isAdminRole() || selectedDateIsClosed() || !isEndingCompleted()) return;
+  endingEditModeDate = isEndingEditMode() ? "" : state.businessDate;
+  if (isEndingEditMode()) {
+    ensurePreviousDateDraft();
+    elements.syncStatus.textContent = "Edit day enabled";
+  } else {
+    elements.syncStatus.textContent = "Edit day closed";
+  }
+  renderGames();
+}
+
+function shouldConfirmEndingEditChange() {
+  return isPreviousDateDraftMode() && isEndingEditMode();
+}
+
 function isTodayDate(date = state.businessDate) {
   return date === todayIso();
 }
@@ -1681,6 +1705,59 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
 
 function showAppNotice({ eyebrow = "Notice", title, body, confirmText = "OK" }) {
   return showAppConfirm({ eyebrow, title, body, confirmText, cancelText: "" });
+}
+
+function captureInputFocusState() {
+  const active = document.activeElement;
+  if (!active?.matches?.("input, select, textarea")) return null;
+
+  const stateSnapshot = {
+    value: active.value,
+    selectionStart: typeof active.selectionStart === "number" ? active.selectionStart : null,
+    selectionEnd: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+    shouldSelect: active.matches("[data-field='todayEnding'], [data-field='manualInstantSold']"),
+    businessDate: state.businessDate,
+  };
+
+  if (active.id) {
+    stateSnapshot.selector = `#${active.id}`;
+    return stateSnapshot;
+  }
+
+  const row = active.closest("tr[data-inventory-id]");
+  if (row && active.dataset.field) {
+    stateSnapshot.selector = `tr[data-inventory-id="${row.dataset.inventoryId}"] [data-field="${active.dataset.field}"]`;
+    return stateSnapshot;
+  }
+
+  if (active.dataset.enterGroup && active.dataset.enterIndex) {
+    stateSnapshot.selector = `[data-enter-group="${active.dataset.enterGroup}"][data-enter-index="${active.dataset.enterIndex}"]`;
+    return stateSnapshot;
+  }
+
+  return null;
+}
+
+function restoreInputFocusState(focusState) {
+  if (!focusState?.selector || focusState.businessDate !== state.businessDate) return;
+  const nextInput = document.querySelector(focusState.selector);
+  if (!nextInput || nextInput.disabled) return;
+  nextInput.focus({ preventScroll: true });
+  if (focusState.selectionStart !== null && typeof nextInput.setSelectionRange === "function") {
+    try {
+      nextInput.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart);
+      return;
+    } catch {
+      // Some input types, like number, do not support setSelectionRange.
+    }
+  }
+  if (focusState.shouldSelect && typeof nextInput.select === "function") {
+    try {
+      nextInput.select();
+    } catch {
+      // Ignore inputs that do not support select().
+    }
+  }
 }
 
 function stampEntryFieldUpdate(entry, key, nextValue, timestamp = new Date().toISOString()) {
@@ -1857,6 +1934,7 @@ function switchDate(isoDate) {
     syncActiveDayDraft();
   }
   if (previousDateDraft?.date !== isoDate) previousDateDraft = null;
+  if (endingEditModeDate && endingEditModeDate !== isoDate) endingEditModeDate = "";
   state.businessDate = isoDate;
   activeMobileGameIndex = 0;
   document.activeElement?.blur?.();
@@ -1902,8 +1980,14 @@ function renderGames() {
   elements.gameRows.innerHTML = "";
   const isClosed = selectedDateIsClosed();
   const isLocked = isActiveDayLockedForRole();
+  const showEditDayButton = isAdminRole() && !isClosed && isEndingCompleted();
   elements.closedDayNotice.hidden = !isClosed;
   elements.saveDayButton.disabled = isClosed || (isCompletedDay() && isUserRole()) || (isSavedPastDate() && isUserRole());
+  if (elements.editDayButton) {
+    elements.editDayButton.hidden = !showEditDayButton;
+    elements.editDayButton.textContent = isEndingEditMode() ? "Stop editing" : "Edit day";
+    elements.editDayButton.classList.toggle("active-edit", isEndingEditMode());
+  }
   // FIX 8: mark section so CSS can show the lock indicator
   elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
 
@@ -1999,11 +2083,12 @@ function renderGames() {
     row.querySelectorAll("[data-field]").forEach((field) => {
       field.disabled =
         isLocked ||
+        (isAdminRole() && field.dataset.field === "todayEnding" && isEndingCompleted() && !isEndingEditMode()) ||
         (isUserRole() && field.dataset.field === "todayEnding" && isEndingCompleted()) ||
         (isUserRole() && field.dataset.field !== "todayEnding") ||
         (isUserRole() && !isTodayDate());
       // Admin sees endings as soft-locked: not disabled (can still read/interact) but a warning fires on focus
-      if (isAdminRole() && field.dataset.field === "todayEnding" && isEndingCompleted()) {
+      if (isAdminRole() && field.dataset.field === "todayEnding" && isEndingCompleted() && !isEndingEditMode()) {
         field.classList.add("ending-locked-field");
       } else {
         field.classList.remove("ending-locked-field");
@@ -2026,13 +2111,13 @@ function renderGames() {
           renderMobileEntryBar();
         }
         // FIX 8: warn on ANY touch of todayEnding when ending is locked (both roles)
-        if (field.dataset.field === "todayEnding" && isEndingCompleted() && !field._endingWarnShown) {
+        if (field.dataset.field === "todayEnding" && isEndingCompleted() && !isEndingEditMode() && !field._endingWarnShown) {
           field._endingWarnShown = true;
           field.blur();
           showAppConfirm({
             eyebrow: "⚠️ Endings locked",
             title: "All endings are complete",
-            body: `All today's ending counts are locked for ${state.businessDate}. To change a value, use "Clear endings" from the sidebar (admin only).`,
+            body: `All today's ending counts are locked for ${state.businessDate}. Use "Edit day" to make adjustments, or "Clear endings" to reset the day.`,
             confirmText: "OK",
             cancelText: "",
           }).then(() => { field._endingWarnShown = false; });
@@ -2041,7 +2126,7 @@ function renderGames() {
       field.addEventListener("change", async () => {
         if (field.dataset.field !== "todayEnding") return;
         const previousValue = field.dataset.previousValue ?? "";
-        if (isPreviousDateDraftMode()) {
+        if (shouldConfirmEndingEditChange()) {
           const ok = await confirmPreviousDateFieldChange(field, previousValue, () => {
             updateEntry(game, field.dataset.field, previousValue, row);
             renderGames();
@@ -2497,6 +2582,7 @@ function renderParsedManualInstantRows(parsed) {
 }
 
 function renderScanReview() {
+  primePendingScanDraftForAdmin();
   const files = scanDraft.files || [];
   const savedRecords = state.scanRecords?.[state.businessDate] || [];
   const isClosed = selectedDateIsClosed();
@@ -2888,6 +2974,25 @@ function loadPendingScanForReview(index) {
   };
   renderScanReview();
   elements.scanParserStatus.textContent = "Pending scan loaded. Review values, then submit.";
+}
+
+function primePendingScanDraftForAdmin() {
+  if (!isAdminRole() || scanDraft.files?.length || scanDraft.parsed) return;
+  const savedRecords = state.scanRecords?.[state.businessDate] || [];
+  const pendingIndex = [...savedRecords].map((record, index) => ({ record, index }))
+    .reverse()
+    .find(({ record }) => record.status === "pending-review")?.index;
+  if (pendingIndex === undefined) return;
+  const record = savedRecords[pendingIndex];
+  scanDraft = {
+    type: record.type || "sales-summary",
+    files: [],
+    parsed: record.type === "manual-instant"
+      ? normalizeManualInstantParsed(record.parsed || {})
+      : normalizeParsedSalesSummary(record.parsed || {}),
+    reviewRecordDate: state.businessDate,
+    reviewRecordIndex: pendingIndex,
+  };
 }
 
 async function invokeSalesSummaryParser(formData) {
@@ -3421,6 +3526,7 @@ function saveDay() {
   if (selectedDateIsClosed()) return;
 
   const dayLog = getDayLog();
+  endingEditModeDate = "";
   syncActiveDayDraft();
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
@@ -3454,6 +3560,7 @@ function allEndingCountsEntered(date = state.businessDate) {
 async function autoCompleteEndingDayIfReady() {
   if (selectedDateIsClosed() || isEndingCompleted() || !allEndingCountsEntered()) return;
   const dayLog = getDayLog();
+  endingEditModeDate = "";
   syncActiveDayDraft();
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
@@ -3882,6 +3989,7 @@ async function clearEntryColumn(column) {
     // Reset ending-level lock so entries can be re-entered
     dayLog.endingCompletedAt = null;
     dayLog.endingCompletedBy = "";
+    endingEditModeDate = "";
   }
   state.lastSavedAt = dayLog.savedAt;
   persistState();
@@ -4663,6 +4771,7 @@ elements.editInventoryButton.addEventListener("click", () => {
   elements.editInventoryButton.classList.toggle("active-edit", inventoryEditMode);
   renderGames();
 });
+elements.editDayButton?.addEventListener("click", toggleEditDayMode);
 elements.saveDayButton.addEventListener("click", saveDay);
 elements.exportButton.addEventListener("click", exportJson);
 const _gst = document.querySelector("#gameSearchToggle");
