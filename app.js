@@ -433,7 +433,7 @@ function normalizeStoredState(parsed = {}) {
     uiSettings: {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
     },
-    scanRecords: parsed.scanRecords || {},
+    scanRecords: compactScanRecordsForStorage(parsed.scanRecords || {}),
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
     _ownSaveTimestamp: parsed._ownSaveTimestamp || "",
@@ -451,15 +451,56 @@ function loadState() {
   }
 }
 
+function compactScanRecordsForStorage(records = {}) {
+  const compact = {};
+  Object.entries(records || {}).forEach(([date, list]) => {
+    compact[date] = (Array.isArray(list) ? list : []).map((record) => ({
+      ...record,
+      photo: record?.photo
+        ? {
+            ...record.photo,
+            dataUrl: "",
+          }
+        : record?.photo,
+      photos: Array.isArray(record?.photos)
+        ? record.photos.map((photo) => ({
+            ...photo,
+            dataUrl: "",
+          }))
+        : record?.photos,
+    }));
+  });
+  return compact;
+}
+
+function stateForLocalStorage() {
+  state.inventory = inventory;
+  return {
+    ...state,
+    inventory,
+    scanRecords: compactScanRecordsForStorage(state.scanRecords || {}),
+  };
+}
+
 function persistState() {
   state.inventory = inventory;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  } catch (error) {
+    console.warn("Local storage persist failed", error);
+    setSyncStatus("Local storage full - cloud sync still running");
+  }
   scheduleCloudSave();
 }
 
 function getSerializableState() {
   state.inventory = inventory;
-  return { ...state, inventory, _deviceId: DEVICE_ID };
+  return {
+    ...state,
+    inventory,
+    scanRecords: compactScanRecordsForStorage(state.scanRecords || {}),
+    _deviceId: DEVICE_ID,
+  };
 }
 
 function setSyncStatus(message) {
@@ -1023,7 +1064,7 @@ async function loadCloudState(options = {}) {
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     inventory = state.inventory || inventory;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     hydrateActiveDay();
     render();
     renderTillInputs();
@@ -2950,7 +2991,7 @@ async function savePendingSalesSummaryScan(parsed) {
       size: scanDraft.files[0]?.size || 0,
       url: photoUpload.url || "",
       uploadError: photoUpload.error || "",
-      dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
+      dataUrl: "",
     },
   });
   persistState();
@@ -3086,7 +3127,7 @@ async function uploadScanPhotos(files, targetDate) {
       size: file?.size || 0,
       url: upload.url || "",
       uploadError: upload.error || "",
-      dataUrl: upload.url ? "" : file?.dataUrl || "",
+      dataUrl: "",
     });
   }
   return uploads;
@@ -3262,7 +3303,7 @@ async function applySalesSummaryScan() {
         size: scanDraft.files[0]?.size || 0,
         url: photoUpload.url || "",
         uploadError: photoUpload.error || "",
-        dataUrl: photoUpload.url ? "" : scanDraft.files[0]?.dataUrl || "",
+        dataUrl: "",
       },
     });
   }
