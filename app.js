@@ -2809,7 +2809,7 @@ function renderActiveScanReviewSummary() {
     return `
       <div class="scan-review-row parsed">
         <span>Sales Summary parsed</span>
-        <strong>Review the live Lottery Totals on ${targetDate}, then submit from Step 3.</strong>
+        <strong>Values are loaded into the live Lottery Totals for ${targetDate}. Review/edit the cells there, then use Submit in Step 3.</strong>
       </div>
       ${(parsed.warnings || []).map((warning) => `<div class="scan-warning">${warning}</div>`).join("")}
     `;
@@ -2824,7 +2824,7 @@ function renderActiveScanReviewSummary() {
   return `
     <div class="scan-review-row parsed">
       <span>Manual ticket history parsed</span>
-      <strong>Review the live Manual Sold cells on ${targetDate}. Parsed ${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${difference >= 0 ? "+" : ""}${currency.format(difference)}).</strong>
+      <strong>Values are loaded into the live Manual Sold cells for ${targetDate}. Parsed ${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${difference >= 0 ? "+" : ""}${currency.format(difference)}). Use RECONCILE for game # review, then submit below.</strong>
     </div>
     ${(parsed.warnings || []).map((warning) => `<div class="scan-warning">${warning}</div>`).join("")}
   `;
@@ -3579,6 +3579,7 @@ function renderInstantMismatch(instantSales, manualInstant) {
   }
 
   elements.reconcileButton.hidden = !isMismatch;
+  elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
   if (elements.manualOverrideButton) {
     elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
   }
@@ -5040,7 +5041,7 @@ elements.nextMonthButton.addEventListener("click", () => shiftDay(1));
 elements.todayButton.addEventListener("click", () => switchDate(todayIso()));
 elements.reconcileButton.addEventListener("click", () => {
   reconcileVisible = !reconcileVisible;
-  elements.reconcileButton.textContent = "RECONCILE";
+  elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
   renderTotals();
 });
 elements.manualOverrideButton?.addEventListener("click", async () => {
