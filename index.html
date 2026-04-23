@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260421-9" />
+    <link rel="stylesheet" href="styles.css?v=20260423-1" />
   </head>
   <body>
     <div class="shell">
@@ -186,7 +186,8 @@
         <section id="instantMismatchAlert" class="alert-card app-view" data-view="daily till" hidden>
           <strong>Instant sales mismatch</strong>
           <span id="instantMismatchText"></span>
-          <button id="reconcileButton" type="button">Reconcile printout</button>
+          <button id="reconcileButton" type="button">RECONCILE</button>
+          <button id="manualOverrideButton" class="ghost-button admin-only" type="button" hidden>Override mismatch</button>
         </section>
 
         <section id="reconcilePanel" class="panel reconcile-panel app-view" data-view="daily till" hidden>
@@ -214,6 +215,10 @@
               <tbody id="reconcileRows"></tbody>
             </table>
           </div>
+        </section>
+
+        <section class="review-submit-strip app-view" data-view="daily till">
+          <button id="manualReviewSubmitButton" class="review-submit-button" type="button" hidden>Submit manual review</button>
         </section>
 
         <section id="till" class="panel split-panel app-view" data-view="daily till">
@@ -326,6 +331,9 @@
             <p class="formula-note">
               Total lottery sales = gross - cancels - online cashes - instant cashes - cashless total - misprint w/out cancel - adjustments + office payout + instant sales.
             </p>
+            <div class="review-submit-strip">
+              <button id="salesSummarySubmitButton" class="review-submit-button" type="button" hidden>Submit sales summary review</button>
+            </div>
             </div>
           </div>
         </section>
@@ -668,6 +676,6 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260421-9"></script>
+    <script src="app.js?v=20260423-6"></script>
   </body>
 </html>

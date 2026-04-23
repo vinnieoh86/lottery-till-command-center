@@ -223,6 +223,7 @@ const elements = {
   reportDifferenceTotal: document.querySelector("#reportDifferenceTotal"),
   instantMismatchAlert: document.querySelector("#instantMismatchAlert"),
   instantMismatchText: document.querySelector("#instantMismatchText"),
+  manualOverrideButton: document.querySelector("#manualOverrideButton"),
   reconcileButton: document.querySelector("#reconcileButton"),
   reconcilePanel: document.querySelector("#reconcilePanel"),
   reconcileRows: document.querySelector("#reconcileRows"),
@@ -277,6 +278,8 @@ const elements = {
   parseScanPagesButton: document.querySelector("#parseScanPagesButton"),
   applyScanButton: document.querySelector("#applyScanButton"),
   scanParserStatus: document.querySelector("#scanParserStatus"),
+  salesSummarySubmitButton: document.querySelector("#salesSummarySubmitButton"),
+  manualReviewSubmitButton: document.querySelector("#manualReviewSubmitButton"),
   pinOverlay: document.querySelector("#pinOverlay"),
   pinEntry: document.querySelector("#pinEntry"),
   pinMessage: document.querySelector("#pinMessage"),
@@ -332,13 +335,13 @@ let inventoryEditMode = false;
 let draggedInventoryId = null;
 let activeView = "daily";
 let reconcileVisible = false;
-let scanDraft = { type: "", files: [], parsed: null };
+let scanDraft = { type: "", files: [], parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
 let cloudSaveTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
 let currentUser = null;
 let pinUnlockInProgress = false;
-let lastPinTap = { key: "", at: 0 };
+let lastPinPressAt = 0;
 let idleLockTimer = null;
 let activeMobileGameIndex = 0;
 let previousDateDraft = null;
@@ -559,19 +562,23 @@ function loadSessionAccess() {
 }
 
 function saveSessionAccess() {
-  if (!accessRole || !currentUser) {
-    sessionStorage.removeItem(SESSION_KEY);
-    return;
+  try {
+    if (!accessRole || !currentUser) {
+      sessionStorage.removeItem(SESSION_KEY);
+      return;
+    }
+    sessionStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({
+        role: accessRole,
+        user: currentUser,
+        activeView,
+        savedAt: new Date().toISOString(),
+      }),
+    );
+  } catch (error) {
+    console.warn("Session storage save failed", error);
   }
-  sessionStorage.setItem(
-    SESSION_KEY,
-    JSON.stringify({
-      role: accessRole,
-      user: currentUser,
-      activeView,
-      savedAt: new Date().toISOString(),
-    }),
-  );
 }
 
 function mergePinUsers(...userLists) {
@@ -618,17 +625,48 @@ function applyAccessRole(role) {
 
 function renderAccessControls() {
   const admin = isAdminRole();
-  const user = isUserRole();
-  elements.editInventoryButton.hidden = !admin;
-  elements.saveDayButton.hidden = false;
-  elements.exportButton.hidden = !admin;
-  elements.seedMonthButton.hidden = true;
-  elements.adminPinInput.value = state.pinSettings.admin;
-  elements.confirmAdminPinInput.value = "";
-  elements.newUserNameInput.value = "";
-  elements.newUserPinInput.value = "";
+  const pinSettings = state.pinSettings || { admin: "1986", users: [] };
+  if (elements.editInventoryButton) elements.editInventoryButton.hidden = !admin;
+  if (elements.saveDayButton) elements.saveDayButton.hidden = false;
+  if (elements.exportButton) elements.exportButton.hidden = !admin;
+  if (elements.seedMonthButton) elements.seedMonthButton.hidden = true;
+  if (elements.adminPinInput) elements.adminPinInput.value = pinSettings.admin || "1986";
+  if (elements.confirmAdminPinInput) elements.confirmAdminPinInput.value = "";
+  if (elements.newUserNameInput) elements.newUserNameInput.value = "";
+  if (elements.newUserPinInput) elements.newUserPinInput.value = "";
   renderUserList();
   renderMobileEntryBar();
+}
+
+function focusPinEntry() {
+  if (!elements.pinEntry) return;
+  window.setTimeout(() => {
+    elements.pinEntry.focus({ preventScroll: true });
+    if (typeof elements.pinEntry.select === "function") {
+      elements.pinEntry.select();
+    }
+  }, 0);
+}
+
+function pressPinPadButton(button) {
+  if (!button || !elements.pinEntry) return;
+
+  const key = button.dataset.pinKey;
+  const action = button.dataset.pinAction;
+
+  if (key) {
+    elements.pinEntry.value = `${elements.pinEntry.value}${key}`.replace(/\D/g, "").slice(0, 4);
+    if (elements.pinEntry.value.length === 4) {
+      unlockWithPin(elements.pinEntry.value);
+    } else {
+      focusPinEntry();
+    }
+    return;
+  }
+
+  if (action === "clear") elements.pinEntry.value = "";
+  if (action === "backspace") elements.pinEntry.value = elements.pinEntry.value.slice(0, -1);
+  focusPinEntry();
 }
 
 function unlockWithPin(pin) {
@@ -642,41 +680,43 @@ function unlockWithPin(pin) {
   if (normalizedPin.length !== 4) return;
   pinUnlockInProgress = true;
 
-  if (normalizedPin === adminPin || normalizedPin === adminRecoveryPin) {
-    elements.pinEntry.value = "";
-    elements.pinMessage.textContent = "Admin access unlocked.";
-    currentUser = { name: "Admin", role: "admin" };
-    applyAccessRole("admin");
-    resetIdleTimer();
-    render();
-    setActiveView(activeView);
-    window.setTimeout(() => {
-      pinUnlockInProgress = false;
-    }, 180);
-    return;
-  }
+  try {
+    if (normalizedPin === adminPin || normalizedPin === adminRecoveryPin) {
+      elements.pinEntry.value = "";
+      elements.pinMessage.textContent = "Admin access unlocked.";
+      currentUser = { name: "Admin", role: "admin" };
+      applyAccessRole("admin");
+      resetIdleTimer();
+      render();
+      setActiveView(activeView);
+      return;
+    }
 
-  if (matchedUser) {
-    elements.pinEntry.value = "";
-    elements.pinMessage.textContent = `${matchedUser.name || "User"} access unlocked.`;
-    currentUser = { name: matchedUser.name || "User", role: "user" };
-    applyAccessRole("user");
-    resetIdleTimer();
-    render();
-    setActiveView("daily");
-    focusMobileGame(0);
-    window.setTimeout(() => {
-      pinUnlockInProgress = false;
-    }, 180);
-    return;
-  }
+    if (matchedUser) {
+      elements.pinEntry.value = "";
+      elements.pinMessage.textContent = `${matchedUser.name || "User"} access unlocked.`;
+      currentUser = { name: matchedUser.name || "User", role: "user" };
+      applyAccessRole("user");
+      resetIdleTimer();
+      render();
+      setActiveView("daily");
+      focusMobileGame(0);
+      return;
+    }
 
-  elements.pinMessage.textContent = "PIN not recognized. Try again.";
-  elements.pinEntry.value = "";
-  window.setTimeout(() => {
+    elements.pinMessage.textContent = "PIN not recognized. Try again.";
+    elements.pinEntry.value = "";
+    focusPinEntry();
+  } catch (error) {
+    console.error("PIN unlock failed", error);
+    elements.pinMessage.textContent = `Unlock error: ${error?.message || "Please refresh and try again."}`;
+    elements.pinEntry.value = "";
+    currentUser = null;
+    applyAccessRole(null);
+    focusPinEntry();
+  } finally {
     pinUnlockInProgress = false;
-    elements.pinEntry.focus();
-  }, 250);
+  }
 }
 
 function lockApp(message = "Enter PIN to continue.") {
@@ -692,7 +732,7 @@ function lockApp(message = "Enter PIN to continue.") {
   applyAccessRole(null);
   elements.pinEntry.value = "";
   elements.pinMessage.textContent = message;
-  window.setTimeout(() => elements.pinEntry.focus(), 50);
+  focusPinEntry();
 }
 
 function resetIdleTimer() {
@@ -712,6 +752,7 @@ function normalizeUsers() {
 }
 
 function renderUserList() {
+  if (!elements.userList) return;
   const users = normalizeUsers();
   elements.userList.innerHTML = users
     .map(
@@ -1287,6 +1328,20 @@ function getDayLog(date = state.businessDate) {
   }
 
   return state.dailyLogs[date];
+}
+
+function clearManualMismatchOverride(date = state.businessDate) {
+  const dayLog = getDayLog(date);
+  delete dayLog.manualMismatchOverride;
+}
+
+function hasManualMismatchOverride(date = state.businessDate, instantSales = calculateInstantSales(date), manualInstant = calculateManualInstantSales(date)) {
+  const override = state.dailyLogs?.[date]?.manualMismatchOverride;
+  if (!override) return false;
+  return (
+    Math.abs(normalizeNumber(override.instantSales) - normalizeNumber(instantSales)) < 0.01 &&
+    Math.abs(normalizeNumber(override.manualInstant) - normalizeNumber(manualInstant)) < 0.01
+  );
 }
 
 function getEntry(game, date = state.businessDate) {
@@ -1891,7 +1946,11 @@ function dayAttentionItems(date) {
   const instantSales = calculateInstantSales(date);
   const manualInstant = calculateManualInstantSales(date);
   const manualMissing = instantSales > 0 && manualInstant === 0;
-  const manualMismatch = instantSales > 0 && manualInstant > 0 && Math.abs(manualInstant - instantSales) >= 0.01;
+  const manualMismatch =
+    instantSales > 0 &&
+    manualInstant > 0 &&
+    Math.abs(manualInstant - instantSales) >= 0.01 &&
+    !hasManualMismatchOverride(date, instantSales, manualInstant);
   const pendingLabel = pendingScanLabelForDate(date);
 
   if (pendingLabel) items.push({ key: "review", label: pendingLabel, view: pendingLabel.includes("totals") ? "till" : "daily" });
@@ -2087,10 +2146,19 @@ function renderGames() {
     row.classList.toggle("dc-row", Boolean(state.orderDc[gameId(game)]));
     row.querySelector("[data-output='previousEnding']").textContent = getPreviousEnding(game);
     row.querySelector("[data-field='todayEnding']").value = entry.todayEnding;
-    const _mv = entry.manualInstantSold; row.querySelector("[data-field='manualInstantSold']").value = _mv !== '' && _mv !== undefined ? normalizeNumber(_mv).toFixed(2) : '';
+    const displayedManualValue = getDisplayedManualValue(game);
+    row.querySelector("[data-field='manualInstantSold']").value =
+      displayedManualValue !== "" && displayedManualValue !== undefined ? formatDecimalInput(displayedManualValue) : "";
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
+    const manualInput = row.querySelector("[data-field='manualInstantSold']");
+    const manualCell = manualInput?.closest("td");
+    const manualState = manualCellState(game);
+    manualCell?.classList.toggle("manual-mismatch-cell", manualState === "error");
+    manualCell?.classList.toggle("manual-match-cell", manualState === "match");
+    manualInput?.classList.toggle("manual-error-input", manualState === "error");
+    manualInput?.classList.toggle("manual-match-input", manualState === "match");
     const endingChip = row.querySelector(".ending-chip");
     if (endingChip) {
       // Only show timestamp if the cell actually has a value — never show on blank cells
@@ -2115,7 +2183,6 @@ function renderGames() {
     const autoValue = calculateGameSales(game);
     const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
     const manualMismatch = hasManual && Math.abs(manualValue - autoValue) > 0.009;
-    const manualCell = row.querySelector("[data-field='manualInstantSold']")?.closest("td");
     if (manualCell) {
       manualCell.classList.toggle("manual-mismatch-cell", manualMismatch);
       manualCell.classList.toggle("manual-match-cell", hasManual && !manualMismatch);
@@ -2292,6 +2359,7 @@ function renderCashRows() {
 }
 
 function renderTillInputs() {
+  const displayedTill = getDisplayedTill();
   const tillInputOrder = [
     "grossSales",
     "onlineCancels",
@@ -2307,7 +2375,7 @@ function renderTillInputs() {
   tillInputOrder.forEach((key, index) => {
     const input = document.querySelector(`#${key}`);
     if (!input) return;
-    input.value = formatDecimalInput(state.till[key]);
+    input.value = formatDecimalInput(displayedTill[key]);
     input.disabled = selectedDateIsClosed() || isUserRole();
     input.dataset.enterGroup = "lottery-totals";
     input.dataset.enterIndex = String(index);
@@ -2315,34 +2383,47 @@ function renderTillInputs() {
       input.dataset.previousValue = input.value;
     };
     input.oninput = (event) => {
-      state.till[key] = normalizeNumber(event.target.value);
-      state.till = normalizeTill(state.till);
-      syncActiveDayDraft();
-      persistIfLiveDate();
+      if (isActiveSalesSummaryReview()) {
+        scanDraft.salesSummaryReviewValues = {
+          ...(scanDraft.salesSummaryReviewValues || buildSalesSummaryReviewValues(scanDraft.parsed)),
+          [key]: key === "reportDate" ? event.target.value : normalizeNumber(event.target.value),
+        };
+      } else {
+        state.till[key] = normalizeNumber(event.target.value);
+        state.till = normalizeTill(state.till);
+        syncActiveDayDraft();
+        persistIfLiveDate();
+      }
       renderCashlessTotalInput();
       renderTotals();
     };
     input.onchange = () => {
       input.value = formatDecimalInput(input.value);
+      if (isActiveSalesSummaryReview()) {
+        scanDraft.salesSummaryReviewValues = {
+          ...(scanDraft.salesSummaryReviewValues || buildSalesSummaryReviewValues(scanDraft.parsed)),
+          [key]: normalizeNumber(input.value),
+        };
+      }
       input.dataset.previousValue = input.value;
     };
     input.onkeydown = handleGroupedEnterKeydown;
   });
 
   const cashlessTotal = document.querySelector("#cashlessOnlineSales");
-  cashlessTotal.value = formatDecimalInput(normalizeTill(state.till).cashlessOnlineSales);
+  cashlessTotal.value = formatDecimalInput(normalizeTill(displayedTill).cashlessOnlineSales);
   cashlessTotal.disabled = true;
 }
 
 function renderCashlessTotalInput() {
   const cashlessTotal = document.querySelector("#cashlessOnlineSales");
-  if (cashlessTotal) cashlessTotal.value = formatDecimalInput(normalizeTill(state.till).cashlessOnlineSales);
+  if (cashlessTotal) cashlessTotal.value = formatDecimalInput(normalizeTill(getDisplayedTill()).cashlessOnlineSales);
 }
 
 function renderTotals() {
   const instantSales = calculateInstantSales();
-  const manualInstant = calculateManualInstantSales();
-  const lotterySales = calculateLotterySales();
+  const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
+  const lotterySales = calculateLotterySalesForTill(isActiveSalesSummaryReview() ? getDisplayedTill() : state.till, state.businessDate);
   const cashDrawer = calculateCashDrawer();
   const difference = cashDrawer - lotterySales;
 
@@ -2450,6 +2531,104 @@ function normalizeParsedSalesSummary(parsed = {}) {
     confidence: parsed.confidence || "unknown",
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
   };
+}
+
+function isActiveSalesSummaryReview(date = state.businessDate) {
+  if (scanDraft.type !== "sales-summary" || !scanDraft.parsed) return false;
+  const parsed = normalizeParsedSalesSummary(scanDraft.parsed);
+  return (parsed.reportDate || state.businessDate) === date;
+}
+
+function isActiveManualReview(date = state.businessDate) {
+  if (scanDraft.type !== "manual-instant" || !scanDraft.parsed) return false;
+  const parsed = normalizeManualInstantParsed(scanDraft.parsed);
+  return (parsed.reportDate || state.businessDate) === date;
+}
+
+function buildSalesSummaryReviewValues(parsed = scanDraft.parsed) {
+  const normalized = normalizeParsedSalesSummary(parsed);
+  return {
+    reportDate: normalized.reportDate || state.businessDate,
+    grossSales: normalized.grossSales,
+    onlineCancels: normalized.onlineCancels,
+    onlineCashes: normalized.onlineCashes,
+    cashlessOnlineOnlySales: normalized.cashlessOnlineOnlySales,
+    instantCashes: normalized.instantCashes,
+    cashlessInstantSales: normalized.cashlessInstantSales,
+    officePayout: normalized.officePayout,
+    misprintWithoutCancel: normalized.misprintWithoutCancel,
+    adjustments: normalized.adjustments,
+  };
+}
+
+function buildManualReviewValues(parsed = scanDraft.parsed) {
+  const reviewValues = {};
+  manualInstantMatchedRows(parsed).forEach(({ game, amount }) => {
+    if (!game) return;
+    reviewValues[gameId(game)] = formatDecimalInput(amount);
+  });
+  return reviewValues;
+}
+
+function getDisplayedTill() {
+  if (!isActiveSalesSummaryReview()) {
+    return normalizeTill(state.till);
+  }
+  return normalizeTill({
+    ...state.till,
+    ...(scanDraft.salesSummaryReviewValues || buildSalesSummaryReviewValues(scanDraft.parsed)),
+  });
+}
+
+function getDisplayedManualValue(game, date = state.businessDate) {
+  if (isActiveManualReview(date)) {
+    const previewValues = scanDraft.manualReviewValues || {};
+    if (Object.prototype.hasOwnProperty.call(previewValues, gameId(game))) {
+      return previewValues[gameId(game)];
+    }
+  }
+  return getEntry(game, date).manualInstantSold;
+}
+
+function calculateDisplayedManualInstantSales(date = state.businessDate) {
+  return inventory.reduce((sum, game) => sum + normalizeNumber(getDisplayedManualValue(game, date)), 0);
+}
+
+function hasDisplayedManualValue(game, date = state.businessDate) {
+  const value = getDisplayedManualValue(game, date);
+  return value !== "" && value !== undefined && value !== null;
+}
+
+function manualCellState(game, date = state.businessDate) {
+  const autoSales = calculateGameSales(game, date);
+  const manualValue = normalizeNumber(getDisplayedManualValue(game, date));
+  const hasManual = hasDisplayedManualValue(game, date);
+  if (!hasManual && autoSales === 0) return "empty-ok";
+  if (!hasManual && autoSales > 0) return "error";
+  if (Math.abs(manualValue - autoSales) <= 0.009) return "match";
+  return "error";
+}
+
+function currentParsedManualInstantFromReview() {
+  const normalized = normalizeManualInstantParsed(scanDraft.parsed || {});
+  const reviewValues = scanDraft.manualReviewValues || {};
+  const totalsByGame = inventory
+    .map((game) => {
+      const value = Object.prototype.hasOwnProperty.call(reviewValues, gameId(game))
+        ? reviewValues[gameId(game)]
+        : "";
+      if (value === "" || value === undefined || value === null) return null;
+      return {
+        gameNumber: String(game.bookNumber || "").padStart(4, "0"),
+        amount: normalizeNumber(value),
+      };
+    })
+    .filter(Boolean);
+  return normalizeManualInstantParsed({
+    ...normalized,
+    reportDate: normalized.reportDate || state.businessDate,
+    totalsByGame,
+  });
 }
 
 function normalizeParsedReportDate(value) {
@@ -2622,6 +2801,35 @@ function renderParsedManualInstantRows(parsed) {
   `;
 }
 
+function renderActiveScanReviewSummary() {
+  if (!scanDraft.parsed) return "";
+  if (scanDraft.type === "sales-summary") {
+    const parsed = normalizeParsedSalesSummary(scanDraft.parsed);
+    const targetDate = parsed.reportDate || state.businessDate;
+    return `
+      <div class="scan-review-row parsed">
+        <span>Sales Summary parsed</span>
+        <strong>Review the live Lottery Totals on ${targetDate}, then submit from Step 3.</strong>
+      </div>
+      ${(parsed.warnings || []).map((warning) => `<div class="scan-warning">${warning}</div>`).join("")}
+    `;
+  }
+
+  const parsed = normalizeManualInstantParsed(scanDraft.parsed);
+  const targetDate = parsed.reportDate || state.businessDate;
+  const reviewParsed = currentParsedManualInstantFromReview();
+  const parsedTotal = parsedManualInstantTotal(reviewParsed);
+  const autoTotal = calculateInstantSales(targetDate);
+  const difference = parsedTotal - autoTotal;
+  return `
+    <div class="scan-review-row parsed">
+      <span>Manual ticket history parsed</span>
+      <strong>Review the live Manual Sold cells on ${targetDate}. Parsed ${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${difference >= 0 ? "+" : ""}${currency.format(difference)}).</strong>
+    </div>
+    ${(parsed.warnings || []).map((warning) => `<div class="scan-warning">${warning}</div>`).join("")}
+  `;
+}
+
 function renderScanReview() {
   primePendingScanDraftForAdmin();
   const files = scanDraft.files || [];
@@ -2644,9 +2852,7 @@ function renderScanReview() {
       : "No scan loaded";
 
   const activeRows = scanDraft.parsed
-    ? scanDraft.type === "manual-instant"
-      ? renderParsedManualInstantRows(scanDraft.parsed)
-      : renderParsedSalesSummaryRows(scanDraft.parsed)
+    ? renderActiveScanReviewSummary()
     : buildParserChecklist(scanDraft.type)
         .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
         .join("");
@@ -2670,57 +2876,6 @@ function renderScanReview() {
   elements.scanReviewRows.innerHTML = [!userUploadOnly && scanDraft.parsed ? activeRows : files.length ? activeRows : "", !userUploadOnly ? savedRows : ""]
     .filter(Boolean)
     .join("");
-  elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
-    input.addEventListener("input", (event) => {
-      const key = event.target.dataset.scanField;
-      if (!scanDraft.parsed || !key) return;
-      scanDraft.parsed[key] = key === "reportDate" ? event.target.value : normalizeNumber(event.target.value);
-      if (key === "reportDate") scanDraft.parsed.reportDate = normalizeParsedReportDate(event.target.value) || event.target.value;
-    });
-    input.addEventListener("change", (event) => {
-      const key = event.target.dataset.scanField;
-      if (!key || key === "reportDate") return;
-      event.target.value = formatDecimalInput(event.target.value);
-      scanDraft.parsed[key] = normalizeNumber(event.target.value);
-    });
-  });
-  elements.scanReviewRows.querySelectorAll("[data-manual-game]").forEach((input) => {
-    input.addEventListener("input", (event) => {
-      const gameNumber = event.target.dataset.manualGame;
-      if (!scanDraft.parsed || !gameNumber) return;
-      const normalized = normalizeManualInstantParsed(scanDraft.parsed);
-      const target = normalized.totalsByGame.find((item) => item.gameNumber === gameNumber);
-      if (target) target.amount = normalizeNumber(event.target.value);
-      scanDraft.parsed = normalized;
-      const targetDate = normalized.reportDate || state.businessDate;
-      const parsedTotal = parsedManualInstantTotal(normalized);
-      const autoTotal = calculateInstantSales(targetDate);
-      const mismatch = parsedTotal - autoTotal;
-      const summary = elements.scanReviewRows.querySelector("[data-manual-review-total]");
-      if (summary) {
-        summary.textContent = `${currency.format(parsedTotal)} vs auto ${currency.format(autoTotal)} (${mismatch >= 0 ? "+" : ""}${currency.format(mismatch)})`;
-      }
-      const row = event.target.closest(".manual-review-row");
-      const game = inventory.find((candidate) => String(candidate.bookNumber || "").padStart(4, "0") === gameNumber);
-      const autoSales = game ? calculateGameSales(game, targetDate) : 0;
-      const isMismatch = game && Math.abs(normalizeNumber(event.target.value) - autoSales) >= 0.01;
-      row?.classList.toggle("scan-row-mismatch", Boolean(isMismatch));
-      row?.classList.toggle("scan-row-match", !isMismatch);
-    });
-    input.addEventListener("change", (event) => {
-      event.target.value = formatDecimalInput(event.target.value);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      const mismatchInputs = Array.from(elements.scanReviewRows.querySelectorAll(".scan-row-mismatch [data-manual-game]"));
-      const currentIndex = mismatchInputs.indexOf(event.target);
-      const nextInput = mismatchInputs[currentIndex + 1] || Array.from(elements.scanReviewRows.querySelectorAll("[data-manual-game]"))[Array.from(elements.scanReviewRows.querySelectorAll("[data-manual-game]")).indexOf(event.target) + 1];
-      nextInput?.focus();
-      nextInput?.select?.();
-    });
-  });
-
   const activePhotos = files
     .map(
       (file, index) => `
@@ -2783,12 +2938,24 @@ function renderScanReview() {
   elements.parseScanPagesButton.hidden = !parseButtonVisible;
   elements.parseScanPagesButton.disabled = isClosed || !parseButtonVisible;
   elements.parseScanPagesButton.textContent = salesSummaryWaiting ? "Parse sales summary" : "Parse pages";
-  elements.applyScanButton.hidden = userUploadOnly;
-  elements.applyScanButton.disabled = isClosed || !scanDraft.parsed;
+  elements.applyScanButton.hidden = true;
+  elements.applyScanButton.disabled = true;
+  const showSalesSubmit = !userUploadOnly && scanDraft.type === "sales-summary" && scanDraft.parsed;
+  const showManualSubmit = !userUploadOnly && scanDraft.type === "manual-instant" && scanDraft.parsed;
+  if (elements.salesSummarySubmitButton) {
+    elements.salesSummarySubmitButton.hidden = !showSalesSubmit;
+    elements.salesSummarySubmitButton.disabled = isClosed || !showSalesSubmit;
+  }
+  if (elements.manualReviewSubmitButton) {
+    elements.manualReviewSubmitButton.hidden = !showManualSubmit;
+    elements.manualReviewSubmitButton.disabled = isClosed || !showManualSubmit;
+  }
   elements.scanParserStatus.textContent = scanDraft.parsed
     ? userUploadOnly
       ? "Upload complete. Manager review required."
-      : "Parsed values ready. Review before submitting."
+      : scanDraft.type === "sales-summary"
+        ? "Parsed values are loaded into Lottery Totals. Review there, then submit."
+        : "Parsed values are loaded into Manual Sold. Review red cells or RECONCILE, then submit."
     : isClosed
       ? "Closed day locked. Scanning is disabled for Sundays."
       : salesSummaryWaiting
@@ -2825,6 +2992,7 @@ async function parseSalesSummaryScan() {
 
   const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
   scanDraft.parsed = parsed;
+  scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
   if (isUserRole()) {
     await savePendingSalesSummaryScan(parsed);
     await showAppNotice({
@@ -2838,10 +3006,16 @@ async function parseSalesSummaryScan() {
     return;
   }
 
+  if ((parsed.reportDate || state.businessDate) !== state.businessDate) {
+    switchDate(parsed.reportDate || state.businessDate);
+  }
+  renderTillInputs();
+  renderTotals();
+
   await showAppNotice({
     eyebrow: "Manager review",
     title: "Needs Review!",
-    body: "Parsed Sales Summary values are ready. Review and submit before they update Lottery Totals.",
+    body: "Parsed Sales Summary values are loaded into Lottery Totals. Review there, then submit from Step 3.",
     confirmText: "Review now",
   });
   renderScanReview();
@@ -2882,24 +3056,10 @@ async function handleManualInstantParsedResult(parsed) {
   if (targetDate !== state.businessDate) {
     switchDate(targetDate);
   }
+  scanDraft.manualReviewValues = buildManualReviewValues(parsed);
   const parsedTotal = parsedManualInstantTotal(parsed);
   const autoTotal = calculateInstantSales(targetDate);
   const isMatch = Math.abs(parsedTotal - autoTotal) < 0.01;
-
-  if (isMatch) {
-    applyManualInstantParsedToEntries(parsed, targetDate);
-    await saveReviewedManualInstantScan(parsed, "reviewed", { autoApplied: true, targetDate });
-    await showAppNotice({
-      eyebrow: "Upload complete",
-      title: "Complete",
-      body: `Manual instant sold matched auto instant sales at ${currency.format(autoTotal)} for ${targetDate} and was applied.`,
-      confirmText: "OK",
-    });
-    scanDraft.parsed = parsed;
-    render();
-    elements.scanParserStatus.textContent = `Matched and saved to ${targetDate}. Manual instant sold is applied.`;
-    return;
-  }
 
   const pendingRecord = await saveReviewedManualInstantScan(parsed, "pending-review", { autoApplied: false, targetDate });
   scanDraft.reviewRecordDate = pendingRecord.date;
@@ -2918,16 +3078,22 @@ async function handleManualInstantParsedResult(parsed) {
   }
 
   await showAppNotice({
-    eyebrow: "Manager review",
-    title: "Needs Review!",
-    body: `Manual instant parsed ${currency.format(parsedTotal)}, but auto instant sales are ${currency.format(autoTotal)}. Reconcile before submitting.`,
+    eyebrow: isMatch ? "Matched" : "Manager review",
+    title: isMatch ? "Ready to submit" : "Needs Review!",
+    body: isMatch
+      ? `Manual instant matches at ${currency.format(autoTotal)} for ${targetDate}. Review the live Manual Sold cells, then submit below.`
+      : `Manual instant parsed ${currency.format(parsedTotal)}, but auto instant sales are ${currency.format(autoTotal)}. Review the live Manual Sold cells, then submit below.`,
     confirmText: "Review now",
   });
+  renderGames();
+  renderTotals();
+  reconcileVisible = true;
   renderScanReview();
   renderCalendar();
 }
 
 function applyManualInstantParsedToEntries(parsed, date = state.businessDate) {
+  clearManualMismatchOverride(date);
   manualInstantMatchedRows(parsed).forEach(({ game, amount }) => {
     if (!game) return;
     const entry = getEntry(game, date);
@@ -3010,9 +3176,20 @@ function loadPendingScanForReview(index) {
     parsed: record.type === "manual-instant"
       ? normalizeManualInstantParsed(record.parsed || {})
       : normalizeParsedSalesSummary(record.parsed || {}),
+    salesSummaryReviewValues:
+      record.type === "sales-summary" ? buildSalesSummaryReviewValues(record.parsed || {}) : null,
+    manualReviewValues:
+      record.type === "manual-instant" ? buildManualReviewValues(record.parsed || {}) : null,
     reviewRecordDate: state.businessDate,
     reviewRecordIndex: index,
   };
+  const targetDate = scanDraft.type === "manual-instant"
+    ? normalizeManualInstantParsed(record.parsed || {}).reportDate || state.businessDate
+    : normalizeParsedSalesSummary(record.parsed || {}).reportDate || state.businessDate;
+  if (targetDate !== state.businessDate) switchDate(targetDate);
+  renderGames();
+  renderTillInputs();
+  renderTotals();
   renderScanReview();
   elements.scanParserStatus.textContent = "Pending scan loaded. Review values, then submit.";
 }
@@ -3031,6 +3208,10 @@ function primePendingScanDraftForAdmin() {
     parsed: record.type === "manual-instant"
       ? normalizeManualInstantParsed(record.parsed || {})
       : normalizeParsedSalesSummary(record.parsed || {}),
+    salesSummaryReviewValues:
+      record.type === "sales-summary" ? buildSalesSummaryReviewValues(record.parsed || {}) : null,
+    manualReviewValues:
+      record.type === "manual-instant" ? buildManualReviewValues(record.parsed || {}) : null,
     reviewRecordDate: state.businessDate,
     reviewRecordIndex: pendingIndex,
   };
@@ -3134,6 +3315,12 @@ async function uploadScanPhotos(files, targetDate) {
 }
 
 function currentParsedSalesSummaryFromReview() {
+  if (scanDraft.salesSummaryReviewValues) {
+    return normalizeParsedSalesSummary({
+      ...(scanDraft.parsed || {}),
+      ...scanDraft.salesSummaryReviewValues,
+    });
+  }
   const parsed = { ...(scanDraft.parsed || {}) };
   elements.scanReviewRows.querySelectorAll("[data-scan-field]").forEach((input) => {
     const key = input.dataset.scanField;
@@ -3173,7 +3360,7 @@ async function handleScanFiles(type, fileList) {
     scanDraft.files = [...(scanDraft.files || []), ...compressed];
   } else {
     (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
-    scanDraft = { type, files: compressed, parsed: null };
+    scanDraft = { type, files: compressed, parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
   }
   renderScanReview();
   if (type === "sales-summary") {
@@ -3217,7 +3404,7 @@ function clearScanReview(options = {}) {
     }
 
     (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
-    scanDraft = { type: "", files: [], parsed: null };
+  scanDraft = { type: "", files: [], parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
     elements.salesSummaryScanInput.value = "";
     elements.manualInstantScanInput.value = "";
     if (normalizedOptions.clearSavedRecords && savedRecords.length) {
@@ -3311,7 +3498,7 @@ async function applySalesSummaryScan() {
   persistState();
   await saveCloudState();
   (scanDraft.files || []).forEach((file) => URL.revokeObjectURL(file.url));
-  scanDraft = { type: "", files: [], parsed: null };
+  scanDraft = { type: "", files: [], parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
   elements.salesSummaryScanInput.value = "";
   renderCalendar();
   renderTillInputs();
@@ -3324,7 +3511,7 @@ async function applySalesSummaryScan() {
 
 async function applyManualInstantScan() {
   if (scanDraft.type !== "manual-instant" || !scanDraft.parsed) return;
-  const parsed = normalizeManualInstantParsed(scanDraft.parsed);
+  const parsed = currentParsedManualInstantFromReview();
   const targetDate = parsed.reportDate || state.businessDate;
   if (targetDate !== state.businessDate) {
     switchDate(targetDate);
@@ -3362,7 +3549,7 @@ async function applyManualInstantScan() {
 
   persistState();
   await saveCloudState();
-  scanDraft = { type: "", files: [], parsed: null };
+  scanDraft = { type: "", files: [], parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
   elements.manualInstantScanInput.value = "";
   reconcileVisible = true;
   render();
@@ -3370,9 +3557,13 @@ async function applyManualInstantScan() {
 }
 
 function renderInstantMismatch(instantSales, manualInstant) {
-  const anyManualEntered = inventory.some(game => { const v = getEntry(game).manualInstantSold; return v !== "" && v !== undefined && v !== null; });
+  const anyManualEntered = inventory.some(game => {
+    const v = getDisplayedManualValue(game);
+    return v !== "" && v !== undefined && v !== null;
+  });
   const difference = manualInstant - instantSales;
-  const isMismatch = anyManualEntered && Math.abs(difference) > 0.009;
+  const overridden = hasManualMismatchOverride(state.businessDate, instantSales, manualInstant);
+  const isMismatch = anyManualEntered && Math.abs(difference) > 0.009 && !overridden;
   const isMatch = anyManualEntered && !isMismatch;
 
   elements.instantMismatchAlert.hidden = !isMismatch;
@@ -3388,6 +3579,9 @@ function renderInstantMismatch(instantSales, manualInstant) {
   }
 
   elements.reconcileButton.hidden = !isMismatch;
+  if (elements.manualOverrideButton) {
+    elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
+  }
   elements.reconcilePanel.hidden = !reconcileVisible;
   renderReconciliationRows();
 }
@@ -3399,14 +3593,17 @@ function renderReconciliationRows() {
     .map((game) => {
       const tickets = calculateTicketsSold(game);
       const autoSales = calculateGameSales(game);
+      const manualValue = getDisplayedManualValue(game);
+      const hasManual = manualValue !== "" && manualValue !== undefined && manualValue !== null;
       return {
         game,
         tickets,
         autoSales,
-        manual: normalizeNumber(getEntry(game).manualInstantSold),
+        manual: normalizeNumber(manualValue),
+        hasManual,
       };
     })
-    .filter((row) => row.autoSales > 0)
+    .filter((row) => row.autoSales > 0 || row.hasManual)
     .sort((a, b) => String(a.game.bookNumber || "").localeCompare(String(b.game.bookNumber || ""), undefined, { numeric: true }));
 
   if (!rows.length) {
@@ -3415,19 +3612,19 @@ function renderReconciliationRows() {
   }
 
   elements.reconcileRows.innerHTML = rows
-    .map(({ game, tickets, autoSales, manual }) => {
+    .map(({ game, tickets, autoSales, manual, hasManual }) => {
       const variance = manual - autoSales;
-      const hasManualEntry = getEntry(game).manualInstantSold !== '' && getEntry(game).manualInstantSold !== undefined;
+      const stateClass = !hasManual && autoSales === 0 ? "" : Math.abs(variance) > 0.009 || !hasManual ? "reconcile-mismatch" : "reconcile-match";
       return `
-        <tr class="${Math.abs(variance) > 0.009 ? "reconcile-mismatch" : "reconcile-match"}">
+        <tr class="${stateClass}">
           <td>${game.bookNumber || "-"}</td>
           <td>${game.box}</td>
           <td>${game.name || "-"}</td>
           <td>${formatGameValue(game)}</td>
           <td>${tickets}</td>
           <td>${currency.format(autoSales)}</td>
-          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" value="${getEntry(game).manualInstantSold !== '' ? normalizeNumber(getEntry(game).manualInstantSold).toFixed(2) : ''}" /></td>
-          <td class="${Math.abs(variance)>0.009 && hasManualEntry ? 'reconcile-mismatch-cell' : hasManualEntry ? 'reconcile-ok-cell' : ''}">${hasManualEntry ? currency.format(variance) : '-'}</td>
+          <td><input data-reconcile-box="${gameId(game)}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00" value="${hasManual ? formatDecimalInput(manual) : ''}" /></td>
+          <td class="${Math.abs(variance)>0.009 || !hasManual ? 'reconcile-mismatch-cell' : 'reconcile-ok-cell'}">${hasManual ? currency.format(variance) : autoSales > 0 ? "Missing" : "-"}</td>
         </tr>
       `;
     })
@@ -3441,11 +3638,20 @@ function renderReconciliationRows() {
       }
       const game = inventory.find((item) => gameId(item) === event.target.dataset.reconcileBox);
       if (!game) return;
-      getEntry(game).manualInstantSold = event.target.value === "" ? "" : normalizeNumber(event.target.value);
-      syncActiveDayDraft();
-      persistIfLiveDate();
+      if (isActiveManualReview()) {
+        scanDraft.manualReviewValues = {
+          ...(scanDraft.manualReviewValues || buildManualReviewValues(scanDraft.parsed)),
+          [gameId(game)]: event.target.value === "" ? "" : formatDecimalInput(event.target.value),
+        };
+      } else {
+        getEntry(game).manualInstantSold = event.target.value === "" ? "" : normalizeNumber(event.target.value);
+        syncActiveDayDraft();
+        persistIfLiveDate();
+      }
       renderGames();
       renderTotals();
+      renderScanReview();
+      renderReconciliationRows();
     });
   });
 }
@@ -3460,13 +3666,26 @@ function updateEntry(game, key, value, row) {
 
   const entry = getEntry(game);
   const nextValue = value === "" ? "" : normalizeNumber(value);
-  const changed = String(entry[key] ?? "") !== String(nextValue);
-  entry[key] = nextValue;
+  const manualPreviewActive = key === "manualInstantSold" && isActiveManualReview();
+  const changed = manualPreviewActive
+    ? String((scanDraft.manualReviewValues || {})[gameId(game)] ?? "") !== String(value === "" ? "" : formatDecimalInput(nextValue))
+    : String(entry[key] ?? "") !== String(nextValue);
+
+  if (manualPreviewActive) {
+    scanDraft.manualReviewValues = {
+      ...(scanDraft.manualReviewValues || buildManualReviewValues(scanDraft.parsed)),
+      [gameId(game)]: value === "" ? "" : formatDecimalInput(nextValue),
+    };
+  } else {
+    entry[key] = nextValue;
+  }
+
   if (changed && key === "todayEnding") {
     stampEntryFieldUpdate(entry, key, nextValue);
   }
-  if (changed && key === "manualInstantSold") {
+  if (changed && key === "manualInstantSold" && !manualPreviewActive) {
     stampEntryFieldUpdate(entry, key, nextValue);
+    clearManualMismatchOverride();
   }
 
   row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
@@ -3494,16 +3713,22 @@ function updateEntry(game, key, value, row) {
   // Fix 4: update red/green mismatch immediately without waiting for renderGames
   const manualCell = row.querySelector("[data-field='manualInstantSold']")?.closest("td");
   if (manualCell) {
-    const manualValue = normalizeNumber(entry.manualInstantSold);
-    const autoValue = calculateGameSales(game);
-    const hasManual = entry.manualInstantSold !== "" && entry.manualInstantSold !== undefined;
-    const isMismatch = hasManual && Math.abs(manualValue - autoValue) > 0.009;
-    manualCell.classList.toggle("manual-mismatch-cell", isMismatch);
-    manualCell.classList.toggle("manual-match-cell", hasManual && !isMismatch);
+    const stateClass = manualCellState(game);
+    manualCell.classList.toggle("manual-mismatch-cell", stateClass === "error");
+    manualCell.classList.toggle("manual-match-cell", stateClass === "match");
+    const manualField = row.querySelector("[data-field='manualInstantSold']");
+    manualField?.classList.toggle("manual-error-input", stateClass === "error");
+    manualField?.classList.toggle("manual-match-input", stateClass === "match");
   }
 
-  persistIfLiveDate();
+  if (!manualPreviewActive) {
+    persistIfLiveDate();
+  }
   renderTotals();
+  if (manualPreviewActive) {
+    renderReconciliationRows();
+    renderScanReview();
+  }
   if (changed && key === "todayEnding") {
     autoCompleteEndingDayIfReady();
   }
@@ -3513,6 +3738,16 @@ function handleEntryKeydown(event, row, fieldName) {
   if (event.key !== "Enter") return;
 
   event.preventDefault();
+  if (fieldName === "manualInstantSold" && isActiveManualReview()) {
+    const reviewInputs = Array.from(elements.gameRows.querySelectorAll(".manual-error-input[data-field='manualInstantSold']"));
+    const activeReviewIndex = reviewInputs.indexOf(event.target);
+    const nextReviewInput = reviewInputs[activeReviewIndex + 1];
+    if (nextReviewInput) {
+      nextReviewInput.focus();
+      nextReviewInput.select?.();
+      return;
+    }
+  }
   const rows = Array.from(elements.gameRows.querySelectorAll("tr"));
   const currentIndex = rows.indexOf(row);
   const nextRow = rows[currentIndex + 1];
@@ -4031,6 +4266,8 @@ async function clearEntryColumn(column) {
     dayLog.endingCompletedAt = null;
     dayLog.endingCompletedBy = "";
     endingEditModeDate = "";
+  } else {
+    delete dayLog.manualMismatchOverride;
   }
   state.lastSavedAt = dayLog.savedAt;
   persistState();
@@ -4803,8 +5040,33 @@ elements.nextMonthButton.addEventListener("click", () => shiftDay(1));
 elements.todayButton.addEventListener("click", () => switchDate(todayIso()));
 elements.reconcileButton.addEventListener("click", () => {
   reconcileVisible = !reconcileVisible;
-  elements.reconcileButton.textContent = reconcileVisible ? "Hide reconciliation" : "Reconcile printout";
+  elements.reconcileButton.textContent = "RECONCILE";
   renderTotals();
+});
+elements.manualOverrideButton?.addEventListener("click", async () => {
+  const instantSales = calculateInstantSales();
+  const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
+  const difference = manualInstant - instantSales;
+  const ok = await showAppConfirm({
+    eyebrow: "Override mismatch",
+    title: "Accept this instant mismatch?",
+    body: `This will mark ${state.businessDate} as manager-approved with auto ${currency.format(instantSales)}, manual ${currency.format(manualInstant)}, and difference ${currency.format(difference)}.`,
+    confirmText: "Override",
+    cancelText: "Cancel",
+  });
+  if (!ok) return;
+  const dayLog = getDayLog();
+  dayLog.manualMismatchOverride = {
+    instantSales,
+    manualInstant,
+    difference,
+    approvedBy: currentUserName(),
+    approvedAt: new Date().toISOString(),
+  };
+  persistState();
+  saveCloudState();
+  renderTotals();
+  renderCalendar();
 });
 elements.editInventoryButton.addEventListener("click", () => {
   inventoryEditMode = !inventoryEditMode;
@@ -4814,6 +5076,8 @@ elements.editInventoryButton.addEventListener("click", () => {
 });
 elements.editDayButton?.addEventListener("click", toggleEditDayMode);
 elements.saveDayButton.addEventListener("click", saveDay);
+elements.salesSummarySubmitButton?.addEventListener("click", applySalesSummaryScan);
+elements.manualReviewSubmitButton?.addEventListener("click", applyManualInstantScan);
 elements.exportButton.addEventListener("click", exportJson);
 const _gst = document.querySelector("#gameSearchToggle");
 const _gsi = document.querySelector("#gameSearchInput");
@@ -4899,30 +5163,29 @@ elements.pinEntry.addEventListener("input", (event) => {
   if (value.length === 4) unlockWithPin(value);
 });
 elements.pinEntry.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") unlockWithPin(elements.pinEntry.value);
+  if (event.key === "Enter") {
+    event.preventDefault();
+    unlockWithPin(elements.pinEntry.value);
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    elements.pinEntry.value = "";
+  }
 });
-elements.pinOverlay.addEventListener("click", (event) => {
-  if (event.target.closest("button")) return;
-  elements.pinEntry.focus();
+["click", "pointerdown", "touchstart"].forEach((eventName) => {
+  elements.pinOverlay.addEventListener(
+    eventName,
+    (event) => {
+      if (event.target.closest("button")) return;
+      focusPinEntry();
+    },
+    { passive: eventName === "touchstart" },
+  );
 });
 elements.pinPadButtons.forEach((button) => {
-  button.addEventListener("pointerdown", (event) => {
+  button.addEventListener("click", (event) => {
     event.preventDefault();
-    const key = button.dataset.pinKey;
-    const action = button.dataset.pinAction;
-
-    if (key) {
-      const now = Date.now();
-      if (lastPinTap.key === key && now - lastPinTap.at < 180) return;
-      lastPinTap = { key, at: now };
-      elements.pinEntry.value = `${elements.pinEntry.value}${key}`.replace(/\D/g, "").slice(0, 4);
-      if (elements.pinEntry.value.length === 4) unlockWithPin(elements.pinEntry.value);
-      return;
-    }
-
-    if (action === "clear") elements.pinEntry.value = "";
-    if (action === "backspace") elements.pinEntry.value = elements.pinEntry.value.slice(0, -1);
-    elements.pinEntry.focus();
+    pressPinPadButton(button);
   });
 });
 elements.pinLockButton.addEventListener("click", () => lockApp());
@@ -5008,7 +5271,7 @@ applyAccessRole(savedSession?.role || null);
 setActiveView(activeView);
 initCloudSync();
 if (!savedSession?.role) {
-  window.setTimeout(() => elements.pinEntry.focus(), 50);
+  focusPinEntry();
 } else {
   resetIdleTimer();
 }
