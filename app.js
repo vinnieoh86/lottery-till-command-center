@@ -2008,20 +2008,28 @@ function stampEntryFieldUpdate(entry, key, nextValue, timestamp = new Date().toI
 }
 
 function savePreviousDateDraftChange() {
-  if (!isPreviousDateDraftMode()) return;
   const dayLog = getDayLog();
   syncActiveDayDraft();
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   state.dailyLogs[state.businessDate] = cloneJson(dayLog);
   state.lastSavedAt = dayLog.savedAt;
-  previousDateDraft.dayLog = cloneJson(dayLog);
+  if (previousDateDraft?.date === state.businessDate) {
+    previousDateDraft.dayLog = cloneJson(dayLog);
+  }
   persistState();
   elements.syncStatus.textContent = "Previous date change saved";
 }
 
+function shouldProtectHistoricalChange(date = state.businessDate) {
+  if (selectedDateIsClosed()) return false;
+  if (isTodayDate(date)) return false;
+  const dayLog = state.dailyLogs?.[date];
+  return Boolean(dayLog?.savedAt || dayLog?.completedAt || dayLog?.endingCompletedAt || isCompletedDay(date));
+}
+
 function shouldPromptForPreviousDateSave(previousValue, nextValue) {
-  if (!isPreviousDateDraftMode()) return false;
+  if (!shouldProtectHistoricalChange()) return false;
   const previous = String(previousValue ?? "").trim();
   const next = String(nextValue ?? "").trim();
   if (previous === next) return false;
@@ -2246,6 +2254,7 @@ function renderGames() {
     elements.editDayButton.hidden = !showEditDayButton;
     elements.editDayButton.textContent = isEndingEditMode() ? "Stop editing" : "Edit day";
     elements.editDayButton.classList.toggle("active-edit", isEndingEditMode());
+    elements.editDayButton.classList.add("edit-day-button");
   }
   // FIX 8: mark section so CSS can show the lock indicator
   elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
@@ -2412,17 +2421,20 @@ function renderGames() {
         }
       });
       field.addEventListener("change", async () => {
-        if (field.dataset.field !== "todayEnding") return;
         const previousValue = field.dataset.previousValue ?? "";
-        if (shouldConfirmEndingEditChange()) {
-      const ok = await confirmPreviousDateFieldChange(field, previousValue, field.value, () => {
-        updateEntry(game, field.dataset.field, previousValue, row);
-        renderGames();
-        renderTotals();
+        const shouldConfirmProtectedChange =
+          !isActiveManualReview() &&
+          (field.dataset.field === "manualInstantSold" || shouldConfirmEndingEditChange());
+        if (shouldConfirmProtectedChange) {
+          const ok = await confirmPreviousDateFieldChange(field, previousValue, field.value, () => {
+            updateEntry(game, field.dataset.field, previousValue, row);
+            renderGames();
+            renderTotals();
           });
           if (!ok) return;
           field.dataset.previousValue = field.value;
         }
+        if (field.dataset.field !== "todayEnding") return;
         if (!window.matchMedia("(max-width: 760px)").matches) return;
         if (suppressNextMobileAutoAdvance) {
           suppressNextMobileAutoAdvance = false;
@@ -2528,7 +2540,6 @@ function renderCashRows() {
     });
     input.addEventListener("change", async () => {
       const previousValue = input.dataset.previousValue ?? "";
-      if (!isPreviousDateDraftMode()) return;
       const ok = await confirmPreviousDateFieldChange(input, previousValue, input.value, () => {
         state.cashCounts[item.label] = normalizeNumber(previousValue);
         syncActiveDayDraft();
@@ -2581,7 +2592,19 @@ function renderTillInputs() {
       renderCashlessTotalInput();
       renderTotals();
     };
-    input.onchange = () => {
+    input.onchange = async () => {
+      const previousValue = input.dataset.previousValue ?? "";
+      if (!isActiveSalesSummaryReview()) {
+        const ok = await confirmPreviousDateFieldChange(input, previousValue, input.value, () => {
+          state.till[key] = normalizeNumber(previousValue);
+          state.till = normalizeTill(state.till);
+          syncActiveDayDraft();
+          renderTillInputs();
+          renderCashlessTotalInput();
+          renderTotals();
+        });
+        if (!ok) return;
+      }
       input.value = formatDecimalInput(input.value);
       if (isActiveSalesSummaryReview()) {
         scanDraft.salesSummaryReviewValues = {
@@ -3177,8 +3200,10 @@ async function parseSalesSummaryScan() {
   const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
   scanDraft.parsed = parsed;
   scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
+  const pendingRecord = await savePendingSalesSummaryScan(parsed);
+  scanDraft.reviewRecordDate = pendingRecord.date;
+  scanDraft.reviewRecordIndex = pendingRecord.index;
   if (isUserRole()) {
-    await savePendingSalesSummaryScan(parsed);
     await showAppNotice({
       eyebrow: "Upload complete",
       title: "Complete",
@@ -3193,6 +3218,15 @@ async function parseSalesSummaryScan() {
   if ((parsed.reportDate || state.businessDate) !== state.businessDate) {
     switchDate(parsed.reportDate || state.businessDate);
   }
+  scanDraft = {
+    ...scanDraft,
+    type: "sales-summary",
+    files: [],
+    parsed,
+    salesSummaryReviewValues: buildSalesSummaryReviewValues(parsed),
+    reviewRecordDate: pendingRecord.date,
+    reviewRecordIndex: pendingRecord.index,
+  };
   renderTillInputs();
   renderTotals();
 
@@ -3328,7 +3362,7 @@ async function savePendingSalesSummaryScan(parsed) {
   const targetDate = parsed.reportDate || state.businessDate;
   const photoUpload = await uploadScanPhoto(scanDraft.files[0], targetDate);
   state.scanRecords[targetDate] = state.scanRecords[targetDate] || [];
-  state.scanRecords[targetDate].push({
+  const record = {
     type: scanDraft.type,
     status: "pending-review",
     savedAt: new Date().toISOString(),
@@ -3343,12 +3377,15 @@ async function savePendingSalesSummaryScan(parsed) {
       uploadError: photoUpload.error || "",
       dataUrl: "",
     },
-  });
+  };
+  state.scanRecords[targetDate].push(record);
+  const index = state.scanRecords[targetDate].length - 1;
   persistState();
   await saveCloudState();
   elements.scanParserStatus.textContent = photoUpload.error
     ? `Upload saved for review, but photo upload failed: ${photoUpload.error}`
     : `Upload saved for admin review on ${targetDate}.`;
+  return { date: targetDate, index, record };
 }
 
 function loadPendingScanForReview(index) {
@@ -3765,6 +3802,8 @@ function renderInstantMismatch(instantSales, manualInstant) {
 
   elements.reconcileButton.hidden = false;
   elements.reconcileButton.textContent = reconcileVisible ? "Normal view" : "Reconcile";
+  elements.reconcileButton.classList.toggle("reconcile-active-button", reconcileVisible);
+  elements.reconcileButton.classList.toggle("reconcile-inactive-button", !reconcileVisible);
   if (elements.manualOverrideButton) {
     elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
   }
