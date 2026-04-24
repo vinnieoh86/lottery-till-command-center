@@ -5412,17 +5412,9 @@ elements.pinEntry.addEventListener("keydown", (event) => {
   );
 });
 elements.pinPadButtons.forEach((button) => {
-  ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
-    button.addEventListener(
-      eventName,
-      (event) => {
-        event.preventDefault();
-      },
-      { passive: false },
-    );
-  });
   button.addEventListener("click", (event) => {
     event.preventDefault();
+    event.stopPropagation();
     pressPinPadButton(button);
     button.blur();
   });
