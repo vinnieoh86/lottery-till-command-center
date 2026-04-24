@@ -1015,19 +1015,53 @@ function toggleMobileEntryDock() {
   renderMobileEntryBar();
 }
 
-function focusMobileGame(index) {
+function focusMobileGame(index, options = {}) {
   const inputs = getTodayEndingInputs();
   if (!inputs.length) return;
 
   activeMobileGameIndex = Math.min(Math.max(index, 0), inputs.length - 1);
   const input = inputs[activeMobileGameIndex];
-  input.focus();
-  input.scrollIntoView({ behavior: "smooth", block: "center" });
+  const preserveScroll = Boolean(options.preserveScroll);
+  try {
+    input.focus({ preventScroll: preserveScroll });
+  } catch {
+    input.focus();
+  }
+  input.scrollIntoView({ behavior: preserveScroll ? "auto" : "smooth", block: preserveScroll ? "nearest" : "center" });
   renderMobileEntryBar();
 }
 
 function focusAdjacentMobileGame(direction) {
   focusMobileGame(activeMobileGameIndex + direction);
+}
+
+function advanceMobileEndingAfterCommit(field) {
+  if (!field || !window.matchMedia("(max-width: 760px)").matches) return;
+  if (suppressNextMobileAutoAdvance) {
+    suppressNextMobileAutoAdvance = false;
+    return;
+  }
+  const lastAdvance = Number(field.dataset.autoAdvancedAt || 0);
+  const now = Date.now();
+  if (now - lastAdvance < 220) return;
+  field.dataset.autoAdvancedAt = String(now);
+  const inputs = getTodayEndingInputs();
+  const currentIndex = inputs.indexOf(field);
+  const nextInput = currentIndex >= 0 ? inputs[currentIndex + 1] : null;
+  if (!nextInput) {
+    renderMobileEntryBar();
+    return;
+  }
+  activeMobileGameIndex = currentIndex + 1;
+  window.setTimeout(() => {
+    try {
+      nextInput.focus({ preventScroll: true });
+    } catch {
+      nextInput.focus();
+    }
+    nextInput.scrollIntoView({ behavior: "auto", block: "nearest" });
+    renderMobileEntryBar();
+  }, 70);
 }
 
 function scheduleCloudSave() {
@@ -2395,15 +2429,22 @@ function renderGames() {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
       // Fix 3: reformat manual sold as dollar value (2 decimal places) on blur
-      if (field.dataset.field === "manualInstantSold") {
-        field.addEventListener("blur", () => {
-          if (field.value !== "") {
-            field.value = normalizeNumber(field.value).toFixed(2);
-          }
-        });
-      }
-      field.addEventListener("focus", () => {
-        field.dataset.previousValue = field.value;
+        if (field.dataset.field === "manualInstantSold") {
+          field.addEventListener("blur", () => {
+            if (field.value !== "") {
+              field.value = normalizeNumber(field.value).toFixed(2);
+            }
+          });
+        }
+        if (field.dataset.field === "todayEnding") {
+          field.addEventListener("blur", () => {
+            const previousValue = field.dataset.previousValue ?? "";
+            if (String(previousValue) === String(field.value)) return;
+            advanceMobileEndingAfterCommit(field);
+          });
+        }
+        field.addEventListener("focus", () => {
+          field.dataset.previousValue = field.value;
         if (field.dataset.field === "todayEnding") {
           activeMobileGameIndex = rowIndex;
           renderMobileEntryBar();
@@ -2436,12 +2477,7 @@ function renderGames() {
           field.dataset.previousValue = field.value;
         }
         if (field.dataset.field !== "todayEnding") return;
-        if (!window.matchMedia("(max-width: 760px)").matches) return;
-        if (suppressNextMobileAutoAdvance) {
-          suppressNextMobileAutoAdvance = false;
-          return;
-        }
-        window.setTimeout(() => focusAdjacentMobileGame(1), 80);
+        advanceMobileEndingAfterCommit(field);
       });
       field.addEventListener("keydown", (event) => handleEntryKeydown(event, row, field.dataset.field));
     });
