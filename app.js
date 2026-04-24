@@ -4450,6 +4450,18 @@ async function clearEntryColumn(column) {
     endingEditModeDate = "";
   } else {
     delete dayLog.manualMismatchOverride;
+    if (scanDraft.type === "manual-instant") {
+      const parsedDate = normalizeManualInstantParsed(scanDraft.parsed || {}).reportDate || state.businessDate;
+      if (parsedDate === state.businessDate) {
+        scanDraft = {
+          type: "",
+          files: [],
+          parsed: null,
+          salesSummaryReviewValues: null,
+          manualReviewValues: null,
+        };
+      }
+    }
   }
   state.lastSavedAt = new Date().toISOString();
   persistState();
