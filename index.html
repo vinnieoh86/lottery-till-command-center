@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260424-7" />
+    <link rel="stylesheet" href="styles.css?v=20260421-9" />
   </head>
   <body>
     <div class="shell">
@@ -128,10 +128,7 @@
                 <input id="gameSearchInput" class="game-search-input" type="search" placeholder="Game # or name…" autocomplete="off" hidden />
               </div>
               <span class="lock-note">Inventory fields locked for employee mode</span>
-              <button id="reconcileButton" class="ghost-button" type="button">Reconcile</button>
-              <button id="printReconcileButton" class="ghost-button" type="button">Print sheet</button>
               <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
-              <button id="editDayButton" class="ghost-button admin-only" type="button" hidden>Edit day</button>
               <button id="saveDayButton" type="button">Complete day</button>
             </div>
           </div>
@@ -149,10 +146,10 @@
                   <th>$</th>
                   <th>Yesterday</th>
                   <th>Today ending #<br><span id="colHeaderEndingTs" class="col-ts"></span></th>
-                  <th id="ticketsHeader">Tickets sold</th>
-                  <th id="autoSalesHeader">Auto sales $</th>
-                  <th id="manualSalesHeader">Manual sold $<br><span id="colHeaderManualTs" class="col-ts"></span></th>
-                  <th id="trailingHeader">Month tickets</th>
+                  <th>Tickets sold</th>
+                  <th>Auto sales $</th>
+                  <th>Manual sold $<br><span id="colHeaderManualTs" class="col-ts"></span></th>
+                  <th>Month tickets</th>
                   <th></th>
                 </tr>
               </thead>
@@ -188,7 +185,7 @@
         <section id="instantMismatchAlert" class="alert-card app-view" data-view="daily till" hidden>
           <strong>Instant sales mismatch</strong>
           <span id="instantMismatchText"></span>
-          <button id="manualOverrideButton" class="ghost-button admin-only" type="button" hidden>Override mismatch</button>
+          <button id="reconcileButton" type="button">Reconcile printout</button>
         </section>
 
         <section id="reconcilePanel" class="panel reconcile-panel app-view" data-view="daily till" hidden>
@@ -216,10 +213,6 @@
               <tbody id="reconcileRows"></tbody>
             </table>
           </div>
-        </section>
-
-        <section class="review-submit-strip app-view" data-view="daily till">
-          <button id="manualReviewSubmitButton" class="review-submit-button" type="button" hidden>Submit manual review</button>
         </section>
 
         <section id="till" class="panel split-panel app-view" data-view="daily till">
@@ -270,7 +263,7 @@
                     <span id="scanParserStatus">Parser not connected yet. Photos are ready for OCR wiring.</span>
                   </div>
                   <div class="scan-review-footer">
-                    <button id="clearScanReviewButton" class="ghost-button" type="button">Clear all Reviews</button>
+                    <button id="clearScanReviewButton" class="ghost-button" type="button">Clear all scans</button>
                   </div>
                 </div>
               </div>
@@ -332,9 +325,6 @@
             <p class="formula-note">
               Total lottery sales = gross - cancels - online cashes - instant cashes - cashless total - misprint w/out cancel - adjustments + office payout + instant sales.
             </p>
-            <div class="review-submit-strip">
-              <button id="salesSummarySubmitButton" class="review-submit-button" type="button" hidden>Submit sales summary review</button>
-            </div>
             </div>
           </div>
         </section>
@@ -677,6 +667,6 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260424-11"></script>
+    <script src="app.js?v=20260421-9"></script>
   </body>
 </html>
