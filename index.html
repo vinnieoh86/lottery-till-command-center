@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260423-2" />
+    <link rel="stylesheet" href="styles.css?v=20260423-4" />
   </head>
   <body>
     <div class="shell">
@@ -128,6 +128,8 @@
                 <input id="gameSearchInput" class="game-search-input" type="search" placeholder="Game # or name…" autocomplete="off" hidden />
               </div>
               <span class="lock-note">Inventory fields locked for employee mode</span>
+              <button id="reconcileButton" class="ghost-button" type="button">RECONCILE</button>
+              <button id="printReconcileButton" class="ghost-button" type="button">Print sheet</button>
               <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
               <button id="editDayButton" class="ghost-button admin-only" type="button" hidden>Edit day</button>
               <button id="saveDayButton" type="button">Complete day</button>
@@ -147,10 +149,10 @@
                   <th>$</th>
                   <th>Yesterday</th>
                   <th>Today ending #<br><span id="colHeaderEndingTs" class="col-ts"></span></th>
-                  <th>Tickets sold</th>
-                  <th>Auto sales $</th>
-                  <th>Manual sold $<br><span id="colHeaderManualTs" class="col-ts"></span></th>
-                  <th>Month tickets</th>
+                  <th id="ticketsHeader">Tickets sold</th>
+                  <th id="autoSalesHeader">Auto sales $</th>
+                  <th id="manualSalesHeader">Manual sold $<br><span id="colHeaderManualTs" class="col-ts"></span></th>
+                  <th id="trailingHeader">Month tickets</th>
                   <th></th>
                 </tr>
               </thead>
@@ -186,7 +188,6 @@
         <section id="instantMismatchAlert" class="alert-card app-view" data-view="daily till" hidden>
           <strong>Instant sales mismatch</strong>
           <span id="instantMismatchText"></span>
-          <button id="reconcileButton" type="button">RECONCILE</button>
           <button id="manualOverrideButton" class="ghost-button admin-only" type="button" hidden>Override mismatch</button>
         </section>
 
@@ -676,6 +677,6 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260423-7"></script>
+    <script src="app.js?v=20260423-11"></script>
   </body>
 </html>

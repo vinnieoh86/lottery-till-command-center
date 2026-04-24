@@ -225,6 +225,7 @@ const elements = {
   instantMismatchText: document.querySelector("#instantMismatchText"),
   manualOverrideButton: document.querySelector("#manualOverrideButton"),
   reconcileButton: document.querySelector("#reconcileButton"),
+  printReconcileButton: document.querySelector("#printReconcileButton"),
   reconcilePanel: document.querySelector("#reconcilePanel"),
   reconcileRows: document.querySelector("#reconcileRows"),
   cashRows: document.querySelector("#cashRows"),
@@ -1501,6 +1502,46 @@ function calculateBooksSold(game, ticketsSold) {
   return ticketCount ? ticketsSold / ticketCount : 0;
 }
 
+function shouldShowGameInReconcile(game, date = state.businessDate) {
+  const autoSales = calculateGameSales(game, date);
+  const manualValue = getDisplayedManualValue(game, date);
+  const hasManual = manualValue !== "" && manualValue !== undefined && manualValue !== null;
+  return autoSales > 0 || hasManual;
+}
+
+function reconcileGamesForDate(date = state.businessDate) {
+  return inventory
+    .filter((game) => shouldShowGameInReconcile(game, date))
+    .slice()
+    .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }));
+}
+
+function buildReconcileRowsData(date = state.businessDate) {
+  return reconcileGamesForDate(date).map((game) => {
+    const tickets = calculateTicketsSold(game, date);
+    const autoSales = calculateGameSales(game, date);
+    const manualValue = getDisplayedManualValue(game, date);
+    const hasManual = manualValue !== "" && manualValue !== undefined && manualValue !== null;
+    const manual = normalizeNumber(manualValue);
+    const variance = hasManual ? manual - autoSales : null;
+    const stateClass =
+      !hasManual && autoSales === 0
+        ? ""
+        : Math.abs(variance || 0) > 0.009 || !hasManual
+          ? "reconcile-mismatch"
+          : "reconcile-match";
+    return {
+      game,
+      tickets,
+      autoSales,
+      manual,
+      hasManual,
+      variance,
+      stateClass,
+    };
+  });
+}
+
 function getSavedOpenDatesForMonth() {
   return selectedMonthDates().filter((date) => !isClosedDate(date) && state.dailyLogs[date]?.savedAt);
 }
@@ -1964,6 +2005,12 @@ function primaryAttentionView(date) {
   return dayAttentionItems(date)[0]?.view || "daily";
 }
 
+function primaryAttentionTarget(date) {
+  const items = dayAttentionItems(date);
+  if (!items.length) return "daily";
+  return items[0].key === "totals" || items[0].key === "review" && items[0].view === "till" ? "till" : "daily";
+}
+
 function renderCalendar() {
   const selectedDate = new Date(`${state.businessDate}T12:00:00`);
   const year = selectedDate.getFullYear();
@@ -2004,16 +2051,27 @@ function renderCalendar() {
     if (attentionItems.length) card.classList.add("needs-review");
     const attentionBadges = attentionItems
       .slice(0, 2)
-      .map((item) => `<b class="review-alert">${item.label}</b>`)
+      .map((item) => `<small class="review-alert">${item.label}</small>`)
       .join("");
     const varianceBadge =
       isAdminRole() && dayLog?.savedAt
         ? `<em class="day-variance ${getSavedDayTotals(isoDate).variance < 0 ? "negative" : "positive"}">${getSavedDayTotals(isoDate).variance >= 0 ? "+" : ""}${currency.format(getSavedDayTotals(isoDate).variance)}</em>`
         : "";
-    card.innerHTML = `<strong>${day}</strong><span>${date.toLocaleString("en-US", { weekday: "short" })}</span>${attentionBadges}${varianceBadge}`;
+    card.innerHTML = `
+      <div class="day-card-top">
+        <strong>${day}</strong>
+        ${varianceBadge}
+      </div>
+      <span class="day-weekday">${date.toLocaleString("en-US", { weekday: "short" })}</span>
+      <div class="day-attention">${attentionBadges}</div>
+    `;
     card.addEventListener("click", () => {
       switchDate(isoDate);
-      setActiveView(primaryAttentionView(isoDate));
+      setActiveView(primaryAttentionView(isoDate), true);
+      window.setTimeout(() => {
+        const targetId = primaryAttentionTarget(isoDate) === "till" ? "#till" : "#daily-entry";
+        document.querySelector(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
     });
     elements.calendarDays.appendChild(card);
   }
@@ -2106,10 +2164,19 @@ function renderGames() {
   const fmtTs = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   const endingTsEl = document.getElementById("colHeaderEndingTs");
   const manualTsEl = document.getElementById("colHeaderManualTs");
+  const ticketsHeaderEl = document.getElementById("ticketsHeader");
+  const autoSalesHeaderEl = document.getElementById("autoSalesHeader");
+  const manualSalesHeaderEl = document.getElementById("manualSalesHeader");
+  const trailingHeaderEl = document.getElementById("trailingHeader");
   if (endingTsEl) endingTsEl.textContent = fmtTs(latestEndingTs);
   if (manualTsEl) manualTsEl.textContent = fmtTs(latestManualTs);
+  if (ticketsHeaderEl) ticketsHeaderEl.textContent = "Tickets sold";
+  if (autoSalesHeaderEl) autoSalesHeaderEl.textContent = "Auto sales $";
+  if (manualSalesHeaderEl) manualSalesHeaderEl.innerHTML = `Manual sold $<br><span id="colHeaderManualTs" class="col-ts">${fmtTs(latestManualTs)}</span>`;
+  if (trailingHeaderEl) trailingHeaderEl.textContent = reconcileVisible ? "Variance" : "Month tickets";
 
-  inventory.forEach((game, rowIndex) => {
+  const displayGames = reconcileVisible ? reconcileGamesForDate(state.businessDate) : inventory;
+  displayGames.forEach((game, rowIndex) => {
     if (gameSearchQuery) {
       const q = gameSearchQuery.toLowerCase();
       if (!(game.name||"").toLowerCase().includes(q) && !(game.bookNumber||"").includes(q) && !String(game.box).includes(q)) return;
@@ -2152,6 +2219,18 @@ function renderGames() {
     row.querySelector("[data-output='ticketsSold']").textContent = calculateTicketsSold(game);
     row.querySelector("[data-output='sales']").textContent = currency.format(calculateGameSales(game));
     row.querySelector("[data-output='runningTickets']").textContent = calculateRunningTickets(game, "month");
+    row.classList.toggle("reconcile-row", reconcileVisible);
+    if (reconcileVisible) {
+      const runningCell = row.querySelector("[data-output='runningTickets']")?.closest("td");
+      const manualShown = getDisplayedManualValue(game);
+      const hasManualShown = manualShown !== "" && manualShown !== undefined && manualShown !== null;
+      const variance = hasManualShown ? normalizeNumber(manualShown) - calculateGameSales(game) : null;
+      if (runningCell) {
+        runningCell.textContent = hasManualShown ? currency.format(variance) : "Missing";
+        runningCell.classList.toggle("reconcile-mismatch-cell", !hasManualShown || Math.abs(variance || 0) > 0.009);
+        runningCell.classList.toggle("reconcile-ok-cell", hasManualShown && Math.abs(variance || 0) <= 0.009);
+      }
+    }
     const manualInput = row.querySelector("[data-field='manualInstantSold']");
     const manualCell = manualInput?.closest("td");
     const manualState = manualCellState(game);
@@ -2288,6 +2367,10 @@ function renderGames() {
 
     elements.gameRows.appendChild(row);
   });
+
+  if (reconcileVisible && !displayGames.length) {
+    elements.gameRows.innerHTML = `<tr><td colspan="11" class="empty-reconcile-row">No sold games yet for this date.</td></tr>`;
+  }
 }
 
 function updateInventoryField(id, field, value) {
@@ -3561,6 +3644,7 @@ function renderInstantMismatch(instantSales, manualInstant) {
     const v = getDisplayedManualValue(game);
     return v !== "" && v !== undefined && v !== null;
   });
+  const anySoldRows = inventory.some((game) => calculateGameSales(game) > 0 || hasDisplayedManualValue(game));
   const difference = manualInstant - instantSales;
   const overridden = hasManualMismatchOverride(state.businessDate, instantSales, manualInstant);
   const isMismatch = anyManualEntered && Math.abs(difference) > 0.009 && !overridden;
@@ -3578,34 +3662,18 @@ function renderInstantMismatch(instantSales, manualInstant) {
     )}, manual instant sold is ${currency.format(manualInstant)}, difference is ${currency.format(difference)}.`;
   }
 
-  elements.reconcileButton.hidden = !isMismatch;
+  elements.reconcileButton.hidden = false;
   elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
   if (elements.manualOverrideButton) {
     elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
   }
-  elements.reconcilePanel.hidden = !reconcileVisible;
-  renderReconciliationRows();
+  elements.reconcilePanel.hidden = true;
 }
 
 function renderReconciliationRows() {
   if (!reconcileVisible) return;
 
-  const rows = inventory
-    .map((game) => {
-      const tickets = calculateTicketsSold(game);
-      const autoSales = calculateGameSales(game);
-      const manualValue = getDisplayedManualValue(game);
-      const hasManual = manualValue !== "" && manualValue !== undefined && manualValue !== null;
-      return {
-        game,
-        tickets,
-        autoSales,
-        manual: normalizeNumber(manualValue),
-        hasManual,
-      };
-    })
-    .filter((row) => row.autoSales > 0 || row.hasManual)
-    .sort((a, b) => String(a.game.bookNumber || "").localeCompare(String(b.game.bookNumber || ""), undefined, { numeric: true }));
+  const rows = buildReconcileRowsData();
 
   if (!rows.length) {
     elements.reconcileRows.innerHTML = `<tr><td colspan="8">No sold tickets for this date.</td></tr>`;
@@ -3613,9 +3681,7 @@ function renderReconciliationRows() {
   }
 
   elements.reconcileRows.innerHTML = rows
-    .map(({ game, tickets, autoSales, manual, hasManual }) => {
-      const variance = manual - autoSales;
-      const stateClass = !hasManual && autoSales === 0 ? "" : Math.abs(variance) > 0.009 || !hasManual ? "reconcile-mismatch" : "reconcile-match";
+    .map(({ game, tickets, autoSales, manual, hasManual, variance, stateClass }) => {
       return `
         <tr class="${stateClass}">
           <td>${game.bookNumber || "-"}</td>
@@ -4259,7 +4325,7 @@ async function clearEntryColumn(column) {
     }
   });
   dayLog.totals = buildTotals();
-  dayLog.savedAt = now;
+  dayLog.savedAt = null;
   dayLog.completedAt = null;
   dayLog.completedBy = "";
   if (!isManual) {
@@ -4270,7 +4336,7 @@ async function clearEntryColumn(column) {
   } else {
     delete dayLog.manualMismatchOverride;
   }
-  state.lastSavedAt = dayLog.savedAt;
+  state.lastSavedAt = new Date().toISOString();
   persistState();
   hydrateActiveDay();
   render();
@@ -5020,6 +5086,75 @@ function printOrderSheet(orderId) {
   printWindow.print();
 }
 
+function printReconcileSheet(date = state.businessDate) {
+  const rows = buildReconcileRowsData(date);
+  const html = `
+    <!doctype html>
+    <html>
+      <head>
+        <title>Daily Ticket Reconcile ${date}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 18px; color: #111; }
+          h1 { margin: 0 0 4px; font-size: 20px; }
+          p { margin: 0 0 12px; color: #555; font-size: 12px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          th, td { border: 1px solid #a9a9a9; padding: 5px 6px; text-align: left; }
+          th { background: #f2f4ea; }
+          tr.mismatch td { color: #9d2424; }
+          tr.match td { color: #1f6c3d; }
+          .money { text-align: right; white-space: nowrap; }
+          .center { text-align: center; }
+        </style>
+      </head>
+      <body>
+        <h1>Daily Ticket Reconcile Sheet</h1>
+        <p>${date} - Sorted by game # - Zero-sale books hidden</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Book #</th>
+              <th>Box</th>
+              <th>Game</th>
+              <th>$</th>
+              <th>Yesterday</th>
+              <th>Ending</th>
+              <th>Tickets</th>
+              <th>Auto sales</th>
+              <th>Manual sold</th>
+              <th>Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              rows.length
+                ? rows.map(({ game, tickets, autoSales, manual, hasManual, variance, stateClass }) => `
+                    <tr class="${stateClass === "reconcile-match" ? "match" : stateClass === "reconcile-mismatch" ? "mismatch" : ""}">
+                      <td>${game.bookNumber || "-"}</td>
+                      <td class="center">${game.box}</td>
+                      <td>${game.name || "-"}</td>
+                      <td class="money">${formatGameValue(game) || "-"}</td>
+                      <td class="center">${getPreviousEnding(game, date)}</td>
+                      <td class="center">${getEntryForDate(date, game).todayEnding === "" ? "" : getEntryForDate(date, game).todayEnding}</td>
+                      <td class="center">${tickets}</td>
+                      <td class="money">${currency.format(autoSales)}</td>
+                      <td class="money">${hasManual ? currency.format(manual) : ""}</td>
+                      <td class="money">${hasManual ? currency.format(variance) : "Missing"}</td>
+                    </tr>`).join("")
+                : `<tr><td colspan="10">No sold games yet for this date.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+  const printWindow = window.open("", "_blank", "width=960,height=720");
+  if (!printWindow) return;
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
+}
+
 function render() {
   elements.businessDate.value = state.businessDate;
   setDailyEntryDateLabel(state.businessDate);
@@ -5042,8 +5177,10 @@ elements.todayButton.addEventListener("click", () => switchDate(todayIso()));
 elements.reconcileButton.addEventListener("click", () => {
   reconcileVisible = !reconcileVisible;
   elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
+  renderGames();
   renderTotals();
 });
+elements.printReconcileButton?.addEventListener("click", () => printReconcileSheet());
 elements.manualOverrideButton?.addEventListener("click", async () => {
   const instantSales = calculateInstantSales();
   const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
