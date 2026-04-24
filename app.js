@@ -348,6 +348,7 @@ let activeMobileGameIndex = 0;
 let previousDateDraft = null;
 let suppressNextMobileAutoAdvance = false;
 let endingEditModeDate = "";
+let activePrintFrame = null;
 
 function todayIso() {
   const today = new Date();
@@ -643,7 +644,10 @@ function focusPinEntry() {
   if (!elements.pinEntry) return;
   window.setTimeout(() => {
     elements.pinEntry.focus({ preventScroll: true });
-    if (typeof elements.pinEntry.select === "function") {
+    const isSmallTouchDevice =
+      window.matchMedia?.("(max-width: 760px)").matches &&
+      window.matchMedia?.("(pointer: coarse)").matches;
+    if (!isSmallTouchDevice && typeof elements.pinEntry.select === "function") {
       elements.pinEntry.select();
     }
   }, 0);
@@ -3663,7 +3667,7 @@ function renderInstantMismatch(instantSales, manualInstant) {
   }
 
   elements.reconcileButton.hidden = false;
-  elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
+  elements.reconcileButton.textContent = reconcileVisible ? "Normal view" : "Reconcile";
   if (elements.manualOverrideButton) {
     elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
   }
@@ -5087,33 +5091,80 @@ function printOrderSheet(orderId) {
 }
 
 function printReconcileSheet(date = state.businessDate) {
-  const rows = buildReconcileRowsData(date);
+  const currentGames = (reconcileVisible ? reconcileGamesForDate(date) : inventory).filter((game) => {
+    if (!gameSearchQuery) return true;
+    const q = gameSearchQuery.toLowerCase();
+    return (
+      (game.name || "").toLowerCase().includes(q) ||
+      (game.bookNumber || "").includes(q) ||
+      String(game.box).includes(q)
+    );
+  });
+
+  const printableRows = currentGames.map((game) => {
+    const entry = getEntry(game, date);
+    const tickets = calculateTicketsSold(game, date);
+    const autoSales = calculateGameSales(game, date);
+    const manualValue = getDisplayedManualValue(game, date);
+    const hasManual = manualValue !== "" && manualValue !== undefined && manualValue !== null;
+    const manual = normalizeNumber(manualValue);
+    const variance = hasManual ? manual - autoSales : null;
+    const mismatch = reconcileVisible && (!hasManual || Math.abs(variance || 0) > 0.009);
+    return {
+      game,
+      entry,
+      tickets,
+      autoSales,
+      hasManual,
+      manual,
+      variance,
+      mismatch,
+    };
+  });
+
+  const title = reconcileVisible ? "Daily Ticket Reconcile Sheet" : "Daily Ticket Count Sheet";
+  const subtitle = reconcileVisible
+    ? `${date} - Sorted by game # - Zero-sale books hidden`
+    : `${date} - Box order view`;
   const html = `
     <!doctype html>
     <html>
       <head>
-        <title>Daily Ticket Reconcile ${date}</title>
+        <title>${title} ${date}</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 18px; color: #111; }
+          @page { size: portrait; margin: 0.28in; }
+          html, body { margin: 0; padding: 0; background: #fff; }
+          body { font-family: Arial, sans-serif; padding: 10px; color: #111; }
           h1 { margin: 0 0 4px; font-size: 20px; }
-          p { margin: 0 0 12px; color: #555; font-size: 12px; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          p { margin: 0 0 12px; color: #222; font-size: 12px; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
           th, td { border: 1px solid #a9a9a9; padding: 5px 6px; text-align: left; }
           th { background: #f2f4ea; }
-          tr.mismatch td { color: #9d2424; }
-          tr.match td { color: #1f6c3d; }
+          td { color: #111; }
           .money { text-align: right; white-space: nowrap; }
           .center { text-align: center; }
+          .variance-error { color: #9d2424; font-weight: 700; }
+          th:nth-child(1), td:nth-child(1) { width: 5%; }
+          th:nth-child(2), td:nth-child(2) { width: 8%; }
+          th:nth-child(3), td:nth-child(3) { width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          th:nth-child(4), td:nth-child(4) { width: 6%; }
+          th:nth-child(5), td:nth-child(5),
+          th:nth-child(6), td:nth-child(6),
+          th:nth-child(7), td:nth-child(7) { width: 8%; }
+          th:nth-child(8), td:nth-child(8),
+          th:nth-child(9), td:nth-child(9),
+          th:nth-child(10), td:nth-child(10) { width: 11%; }
+          tr { page-break-inside: avoid; }
         </style>
       </head>
       <body>
-        <h1>Daily Ticket Reconcile Sheet</h1>
-        <p>${date} - Sorted by game # - Zero-sale books hidden</p>
+        <h1>${title}</h1>
+        <p>${subtitle}</p>
         <table>
           <thead>
             <tr>
-              <th>Book #</th>
               <th>Box</th>
+              <th>Book #</th>
               <th>Game</th>
               <th>$</th>
               <th>Yesterday</th>
@@ -5126,33 +5177,71 @@ function printReconcileSheet(date = state.businessDate) {
           </thead>
           <tbody>
             ${
-              rows.length
-                ? rows.map(({ game, tickets, autoSales, manual, hasManual, variance, stateClass }) => `
-                    <tr class="${stateClass === "reconcile-match" ? "match" : stateClass === "reconcile-mismatch" ? "mismatch" : ""}">
-                      <td>${game.bookNumber || "-"}</td>
+              printableRows.length
+                ? printableRows.map(({ game, tickets, autoSales, manual, hasManual, variance, mismatch, entry }) => `
+                    <tr>
                       <td class="center">${game.box}</td>
+                      <td>${game.bookNumber || "-"}</td>
                       <td>${game.name || "-"}</td>
                       <td class="money">${formatGameValue(game) || "-"}</td>
                       <td class="center">${getPreviousEnding(game, date)}</td>
-                      <td class="center">${getEntryForDate(date, game).todayEnding === "" ? "" : getEntryForDate(date, game).todayEnding}</td>
+                      <td class="center">${entry.todayEnding === "" ? "" : entry.todayEnding}</td>
                       <td class="center">${tickets}</td>
-                      <td class="money">${currency.format(autoSales)}</td>
+                      <td class="money">${Math.abs(autoSales) > 0.009 ? currency.format(autoSales) : ""}</td>
                       <td class="money">${hasManual ? currency.format(manual) : ""}</td>
-                      <td class="money">${hasManual ? currency.format(variance) : "Missing"}</td>
+                      <td class="money ${mismatch ? "variance-error" : ""}">${hasManual ? currency.format(variance) : reconcileVisible ? "Missing" : ""}</td>
                     </tr>`).join("")
-                : `<tr><td colspan="10">No sold games yet for this date.</td></tr>`
+                : `<tr><td colspan="10">No rows available for this date.</td></tr>`
             }
           </tbody>
         </table>
       </body>
     </html>
   `;
-  const printWindow = window.open("", "_blank", "width=960,height=720");
-  if (!printWindow) return;
-  printWindow.document.write(html);
-  printWindow.document.close();
-  printWindow.focus();
-  printWindow.print();
+  if (activePrintFrame) {
+    activePrintFrame.remove();
+    activePrintFrame = null;
+  }
+
+  const frame = document.createElement("iframe");
+  activePrintFrame = frame;
+  frame.style.position = "fixed";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.width = "0";
+  frame.style.height = "0";
+  frame.style.border = "0";
+  frame.setAttribute("aria-hidden", "true");
+  document.body.appendChild(frame);
+
+  frame.onload = () => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+    } catch {
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `lottery-${reconcileVisible ? "reconcile" : "daily"}-${date}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+      alert("Print preview could not open. A printable file was downloaded instead. In the print dialog, choose Save as PDF if needed.");
+    } finally {
+      window.setTimeout(() => {
+        frame.remove();
+        if (activePrintFrame === frame) activePrintFrame = null;
+      }, 1500);
+    }
+  };
+
+  const doc = frame.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(html);
+  doc.close();
 }
 
 function render() {
@@ -5176,11 +5265,13 @@ elements.nextMonthButton.addEventListener("click", () => shiftDay(1));
 elements.todayButton.addEventListener("click", () => switchDate(todayIso()));
 elements.reconcileButton.addEventListener("click", () => {
   reconcileVisible = !reconcileVisible;
-  elements.reconcileButton.textContent = reconcileVisible ? "NORMAL VIEW" : "RECONCILE";
+  elements.reconcileButton.textContent = reconcileVisible ? "Normal view" : "Reconcile";
   renderGames();
   renderTotals();
 });
-elements.printReconcileButton?.addEventListener("click", () => printReconcileSheet());
+elements.printReconcileButton?.addEventListener("click", () => {
+  printReconcileSheet();
+});
 elements.manualOverrideButton?.addEventListener("click", async () => {
   const instantSales = calculateInstantSales();
   const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
@@ -5321,9 +5412,19 @@ elements.pinEntry.addEventListener("keydown", (event) => {
   );
 });
 elements.pinPadButtons.forEach((button) => {
+  ["pointerdown", "touchstart", "mousedown"].forEach((eventName) => {
+    button.addEventListener(
+      eventName,
+      (event) => {
+        event.preventDefault();
+      },
+      { passive: false },
+    );
+  });
   button.addEventListener("click", (event) => {
     event.preventDefault();
     pressPinPadButton(button);
+    button.blur();
   });
 });
 elements.pinLockButton.addEventListener("click", () => lockApp());
