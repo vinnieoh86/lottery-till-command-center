@@ -410,11 +410,18 @@ function createDefaultState() {
 
 function normalizeStoredState(parsed = {}) {
   const defaults = createDefaultState();
+  const storedDailyLogs = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(DAILY_LOGS_KEY) || "null");
+    } catch {
+      return null;
+    }
+  })();
   return {
     ...defaults,
     businessDate: parsed.businessDate || todayIso(),
     inventory: parsed.inventory || inventory,
-    dailyLogs: parsed.dailyLogs || {},
+    dailyLogs: storedDailyLogs || parsed.dailyLogs || {},
     till: normalizeTill(parsed.till),
     cashCounts: {
       ...emptyCashCounts(),
@@ -977,7 +984,7 @@ function scheduleCloudSave() {
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
     saveCloudState();
-  }, 220);
+  }, 80);
 }
 
 function ensureCloudPolling() {
@@ -1196,7 +1203,7 @@ async function loadCloudState(options = {}) {
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     inventory = state.inventory || inventory;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    writeLocalState();
     hydrateActiveDay();
     render();
     renderTillInputs();
