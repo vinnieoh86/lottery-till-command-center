@@ -1397,6 +1397,7 @@ function normalizeTill(till = {}) {
   const normalized = { ...defaultTill, ...till };
 
   if (
+    !Object.prototype.hasOwnProperty.call(till, "cashlessOnlineOnlySales") &&
     normalizeNumber(normalized.cashlessOnlineSales) &&
     !normalizeNumber(normalized.cashlessOnlineOnlySales) &&
     !normalizeNumber(normalized.cashlessInstantSales)
