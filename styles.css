@@ -925,6 +925,24 @@ h2 {
   background: rgba(255, 255, 255, 0.55);
 }
 
+.ghost-button.edit-day-button {
+  color: #352300;
+  border-color: rgba(181, 126, 0, 0.5);
+  background: linear-gradient(135deg, #ffd95a, #f4bc2b);
+}
+
+.ghost-button.reconcile-inactive-button {
+  color: #0c2d15;
+  border-color: rgba(34, 107, 56, 0.35);
+  background: linear-gradient(135deg, #c9f24a, #8ed166);
+}
+
+.ghost-button.reconcile-active-button {
+  color: #fff3f1;
+  border-color: rgba(126, 28, 28, 0.35);
+  background: linear-gradient(135deg, #d35f5f, #8f2323);
+}
+
 .table-wrap {
   overflow: auto;
 }
