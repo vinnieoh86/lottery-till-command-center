@@ -1,4 +1,5 @@
 const STORAGE_KEY = "lotteryTillState:v2";
+const STORAGE_BACKUP_KEY = "lotteryTillStateBackup:v1";
 const SESSION_KEY = "lotteryTillSession:v1";
 const CLOUD_STORE_KEY = "lottery-till-main";
 const IDLE_LOCK_MS = 180000;
@@ -447,12 +448,26 @@ function normalizeStoredState(parsed = {}) {
 
 function loadState() {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return createDefaultState();
+  if (!stored) {
+    const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
+    if (!backup) return createDefaultState();
+    try {
+      return normalizeStoredState(JSON.parse(backup));
+    } catch {
+      return createDefaultState();
+    }
+  }
 
   try {
     return normalizeStoredState(JSON.parse(stored));
   } catch {
-    return createDefaultState();
+    const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
+    if (!backup) return createDefaultState();
+    try {
+      return normalizeStoredState(JSON.parse(backup));
+    } catch {
+      return createDefaultState();
+    }
   }
 }
 
@@ -496,15 +511,37 @@ function stateForLocalStorageFallback() {
   };
 }
 
+function stateForBackupStorage() {
+  state.inventory = inventory;
+  return {
+    businessDate: state.businessDate,
+    dailyLogs: state.dailyLogs || {},
+    till: state.till || defaultTill,
+    cashCounts: state.cashCounts || emptyCashCounts(),
+    inventory,
+    orderInventory: state.orderInventory || {},
+    extraOrders: state.extraOrders || [],
+    orderDc: state.orderDc || {},
+    orderHistory: state.orderHistory || [],
+    orderSettings: state.orderSettings || createDefaultState().orderSettings,
+    pinSettings: state.pinSettings || createDefaultState().pinSettings,
+    uiSettings: state.uiSettings || createDefaultState().uiSettings,
+    lastSavedAt: state.lastSavedAt || null,
+    seedVersions: state.seedVersions || {},
+  };
+}
+
 function writeLocalState() {
   state.inventory = inventory;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(stateForBackupStorage()));
     return true;
   } catch (error) {
     console.warn("Local storage persist failed", error);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorageFallback()));
+      localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(stateForBackupStorage()));
       setSyncStatus("Local storage trimmed - entries preserved");
       return true;
     } catch (fallbackError) {
