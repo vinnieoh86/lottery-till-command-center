@@ -487,14 +487,36 @@ function stateForLocalStorage() {
   };
 }
 
-function persistState() {
+function stateForLocalStorageFallback() {
+  state.inventory = inventory;
+  return {
+    ...state,
+    inventory,
+    scanRecords: {},
+  };
+}
+
+function writeLocalState() {
   state.inventory = inventory;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    return true;
   } catch (error) {
     console.warn("Local storage persist failed", error);
-    setSyncStatus("Local storage full - cloud sync still running");
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorageFallback()));
+      setSyncStatus("Local storage trimmed - entries preserved");
+      return true;
+    } catch (fallbackError) {
+      console.warn("Local storage fallback persist failed", fallbackError);
+      setSyncStatus("Local storage full - cloud sync still running");
+      return false;
+    }
   }
+}
+
+function persistState() {
+  writeLocalState();
   scheduleCloudSave();
 }
 
@@ -891,7 +913,7 @@ function scheduleCloudSave() {
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
     saveCloudState();
-  }, 600);
+  }, 220);
 }
 
 function ensureCloudPolling() {
@@ -5479,9 +5501,26 @@ document.addEventListener("keydown", (event) => {
   event.target.blur();
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && supabaseClient) {
+  if (document.hidden) {
+    writeLocalState();
+    if (supabaseClient && cloudSaveTimer) {
+      window.clearTimeout(cloudSaveTimer);
+      cloudSaveTimer = null;
+      saveCloudState();
+    }
+    return;
+  }
+  if (supabaseClient) {
     refreshCloudPolling();
     loadCloudState({ quietIfUnchanged: true });
+  }
+});
+window.addEventListener("pagehide", () => {
+  writeLocalState();
+  if (supabaseClient && cloudSaveTimer) {
+    window.clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = null;
+    saveCloudState();
   }
 });
 window.addEventListener("focus", () => {

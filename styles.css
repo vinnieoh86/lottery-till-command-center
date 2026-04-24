@@ -336,11 +336,18 @@ select:focus {
   text-align: center;
   -webkit-text-security: disc;
   -webkit-tap-highlight-color: transparent;
+  caret-color: transparent;
 }
 
 .pin-entry:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(201, 242, 74, 0.35);
+}
+
+.pin-entry:focus-visible,
+.pin-pad button:focus,
+.pin-pad button:focus-visible {
+  outline: none;
 }
 
 .pin-overlay,
