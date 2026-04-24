@@ -1,5 +1,6 @@
 const STORAGE_KEY = "lotteryTillState:v2";
 const STORAGE_BACKUP_KEY = "lotteryTillStateBackup:v1";
+const DAILY_LOGS_KEY = "lotteryTillDailyLogs:v1";
 const SESSION_KEY = "lotteryTillSession:v1";
 const CLOUD_STORE_KEY = "lottery-till-main";
 const IDLE_LOCK_MS = 180000;
@@ -448,23 +449,47 @@ function normalizeStoredState(parsed = {}) {
 
 function loadState() {
   const stored = localStorage.getItem(STORAGE_KEY);
+  const storedDailyLogs = localStorage.getItem(DAILY_LOGS_KEY);
   if (!stored) {
     const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
-    if (!backup) return createDefaultState();
+    if (!backup) {
+      const defaults = createDefaultState();
+      if (!storedDailyLogs) return defaults;
+      try {
+        return normalizeStoredState({
+          ...defaults,
+          dailyLogs: JSON.parse(storedDailyLogs),
+        });
+      } catch {
+        return defaults;
+      }
+    }
     try {
-      return normalizeStoredState(JSON.parse(backup));
+      const parsedBackup = JSON.parse(backup);
+      return normalizeStoredState({
+        ...parsedBackup,
+        dailyLogs: storedDailyLogs ? JSON.parse(storedDailyLogs) : parsedBackup.dailyLogs,
+      });
     } catch {
       return createDefaultState();
     }
   }
 
   try {
-    return normalizeStoredState(JSON.parse(stored));
+    const parsed = JSON.parse(stored);
+    return normalizeStoredState({
+      ...parsed,
+      dailyLogs: storedDailyLogs ? JSON.parse(storedDailyLogs) : parsed.dailyLogs,
+    });
   } catch {
     const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
     if (!backup) return createDefaultState();
     try {
-      return normalizeStoredState(JSON.parse(backup));
+      const parsedBackup = JSON.parse(backup);
+      return normalizeStoredState({
+        ...parsedBackup,
+        dailyLogs: storedDailyLogs ? JSON.parse(storedDailyLogs) : parsedBackup.dailyLogs,
+      });
     } catch {
       return createDefaultState();
     }
@@ -536,12 +561,14 @@ function writeLocalState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(stateForBackupStorage()));
+    localStorage.setItem(DAILY_LOGS_KEY, JSON.stringify(state.dailyLogs || {}));
     return true;
   } catch (error) {
     console.warn("Local storage persist failed", error);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorageFallback()));
       localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(stateForBackupStorage()));
+      localStorage.setItem(DAILY_LOGS_KEY, JSON.stringify(state.dailyLogs || {}));
       setSyncStatus("Local storage trimmed - entries preserved");
       return true;
     } catch (fallbackError) {
