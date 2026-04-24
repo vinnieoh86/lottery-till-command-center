@@ -1323,11 +1323,12 @@ async function handleIncomingCloudChange(payload) {
   const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
   const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
   if (isApplyingCloudState || isOwnEcho) return;
-  const previousScanCount = (state.scanRecords?.[todayIso()] || []).length;
+  const activeDate = state.businessDate || todayIso();
+  const previousScanCount = (state.scanRecords?.[activeDate] || []).length;
   const previousLastSaved = state.lastSavedAt;
   await loadCloudState({ quietIfUnchanged: true });
-  const newScanCount = (state.scanRecords?.[todayIso()] || []).length;
-  const newPendingReview = (state.scanRecords?.[todayIso()] || []).some(r => r.status === "pending-review");
+  const newScanCount = (state.scanRecords?.[activeDate] || []).length;
+  const newPendingReview = (state.scanRecords?.[activeDate] || []).some(r => r.status === "pending-review");
   if (newScanCount > previousScanCount && newPendingReview && isAdminRole()) {
     showRealtimeBanner("New scan uploaded - needs your review!", true);
     setActiveView("daily");
@@ -1345,9 +1346,10 @@ async function handleIncomingCloudChange(payload) {
         }
       }
     }
+    primePendingScanDraftForAdmin();
     renderScanReview();
   } else if (state.lastSavedAt !== previousLastSaved) {
-    const savedBy = state.dailyLogs?.[todayIso()]?.completedBy || state.dailyLogs?.[todayIso()]?.endingCompletedBy || "another device";
+    const savedBy = state.dailyLogs?.[activeDate]?.completedBy || state.dailyLogs?.[activeDate]?.endingCompletedBy || "another device";
     showRealtimeBanner(`Synced from ${savedBy}`);
   }
 }
@@ -1422,10 +1424,6 @@ function emptyCashCounts() {
 }
 
 function getDayLog(date = state.businessDate) {
-  if (previousDateDraft?.date === date) {
-    return previousDateDraft.dayLog;
-  }
-
   if (!state.dailyLogs[date]) {
     state.dailyLogs[date] = {
       entries: {},
@@ -1836,15 +1834,10 @@ function isActiveDayLockedForRole(date = state.businessDate) {
 }
 
 function isPreviousDateDraftMode(date = state.businessDate) {
-  return previousDateDraft?.date === date;
+  return false;
 }
 
 function persistIfLiveDate(statusText = "Autosaved") {
-  if (isPreviousDateDraftMode()) {
-    elements.syncStatus.textContent = "Previous date edit pending";
-    return;
-  }
-
   markActiveDaySaved(statusText);
   persistState();
 }
@@ -1858,18 +1851,11 @@ function selectedDateLabel(date = state.businessDate) {
 }
 
 function resolvePreviousDateDraftBeforeLeaving() {
-  if (!previousDateDraft) return;
   previousDateDraft = null;
-  elements.syncStatus.textContent = "Previous date edit mode closed";
 }
 
 function ensurePreviousDateDraft() {
-  if (!isAdminRole() || (!isSavedPastDate() && !isCompletedDay())) return;
-  if (previousDateDraft?.date === state.businessDate) return;
-  previousDateDraft = {
-    date: state.businessDate,
-    dayLog: cloneJson(state.dailyLogs[state.businessDate]),
-  };
+  return;
 }
 
 function canEditActiveDay(targetInput) {
