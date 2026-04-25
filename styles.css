@@ -3092,13 +3092,7 @@ pre {
 }
 @media (max-width: 760px) {
   .realtime-banner {
-    bottom: 5.5rem;
-    left: 0.7rem;
-    right: 0.7rem;
-    transform: none;
-    border-radius: 1rem;
-    white-space: normal;
-    font-size: 0.82rem;
+    display: none;
   }
   .game-search-input { width: 8rem; }
   .game-search-input:focus { width: 10rem; }
