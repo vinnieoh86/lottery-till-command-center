@@ -1368,46 +1368,152 @@ function processingPhotoUrlsForRecord(record) {
   return record?.photo?.url ? [record.photo.url] : [];
 }
 
+async function fetchScanPhotoAsQueuedFile(url, fallbackName = "scan.jpg") {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Could not load uploaded scan photo (${response.status}).`);
+  }
+  const blob = await response.blob();
+  const pathname = (() => {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return "";
+    }
+  })();
+  const rawName = pathname.split("/").pop() || fallbackName;
+  return {
+    name: rawName,
+    blob,
+    url,
+    size: blob.size,
+    originalSize: blob.size,
+  };
+}
+
+function upsertProcessedScanRecord(recordDate, recordId, targetDate, updater) {
+  state.scanRecords = state.scanRecords || {};
+  const sourceRecords = Array.isArray(state.scanRecords[recordDate]) ? [...state.scanRecords[recordDate]] : [];
+  let locatedRecord = null;
+  let sourceIndex = sourceRecords.findIndex((entry) => {
+    if (entry?.id === recordId) {
+      locatedRecord = entry;
+      return true;
+    }
+    return false;
+  });
+  if (sourceIndex < 0 || !locatedRecord) {
+    for (const [date, records] of Object.entries(state.scanRecords)) {
+      const idx = Array.isArray(records) ? records.findIndex((entry) => entry?.id === recordId) : -1;
+      if (idx >= 0) {
+        sourceIndex = idx;
+        locatedRecord = records[idx];
+        recordDate = date;
+        break;
+      }
+    }
+  }
+  if (sourceIndex < 0 || !locatedRecord) throw new Error(`Could not find processing scan ${recordId}.`);
+  const fromRecords = Array.isArray(state.scanRecords[recordDate]) ? [...state.scanRecords[recordDate]] : [];
+  fromRecords.splice(sourceIndex, 1);
+  if (fromRecords.length) state.scanRecords[recordDate] = fromRecords;
+  else delete state.scanRecords[recordDate];
+  state.scanRecords[targetDate] = Array.isArray(state.scanRecords[targetDate]) ? [...state.scanRecords[targetDate]] : [];
+  state.scanRecords[targetDate].push(updater({ ...locatedRecord }));
+}
+
+async function processQueuedScanRecord(date, record) {
+  if (!record?.id || activeProcessingScanIds.has(record.id)) return;
+  const urls = processingPhotoUrlsForRecord(record);
+  if (!urls.length) return;
+  activeProcessingScanIds.add(record.id);
+  try {
+    if (record.type === "sales-summary") {
+      const queuedFile = await fetchScanPhotoAsQueuedFile(urls[0], record.photo?.name || "sales-summary.jpg");
+      const formData = new FormData();
+      formData.append("image", queuedFile.blob, queuedFile.name);
+      formData.append("businessDate", record.selectedBusinessDate || date);
+      const data = await invokeSalesSummaryParser(formData);
+      const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
+      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
+      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
+        ...existingRecord,
+        status: "pending-review",
+        parsed,
+        parsedReportDate: targetDate,
+        processingError: "",
+        processedAt: new Date().toISOString(),
+      }));
+      persistState();
+      await saveCloudState();
+      if (isAdminRole() && state.businessDate === targetDate) {
+        primePendingScanDraftForAdmin();
+        renderScanReview();
+      }
+      renderCalendar();
+      return;
+    }
+
+    if (record.type === "manual-instant") {
+      const files = [];
+      for (let index = 0; index < urls.length; index += 1) {
+        files.push(await fetchScanPhotoAsQueuedFile(urls[index], record.photos?.[index]?.name || `ticket-page-${index + 1}.jpg`));
+      }
+      const formData = new FormData();
+      files.forEach((file) => formData.append("images", file.blob, file.name));
+      formData.append("businessDate", record.selectedBusinessDate || date);
+      const data = await invokeManualInstantParser(formData);
+      const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
+      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
+      const parsedTotal = parsedManualInstantTotal(parsed);
+      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
+        ...existingRecord,
+        status: "pending-review",
+        parsed,
+        parsedReportDate: targetDate,
+        processingError: "",
+        processedAt: new Date().toISOString(),
+        totals: {
+          parsedManualInstant: parsedTotal,
+          instantSales: calculateInstantSales(targetDate),
+          difference: parsedTotal - calculateInstantSales(targetDate),
+        },
+      }));
+      persistState();
+      await saveCloudState();
+      if (isAdminRole() && state.businessDate === targetDate) {
+        primePendingScanDraftForAdmin();
+        renderScanReview();
+      }
+      renderCalendar();
+    }
+  } catch (error) {
+    console.error("Queued scan processing failed", error);
+    try {
+      upsertProcessedScanRecord(date, record.id, date, (existingRecord) => ({
+        ...existingRecord,
+        status: "parse-error",
+        processingError: error.message || "Could not parse queued scan",
+        processedAt: new Date().toISOString(),
+      }));
+      persistState();
+      await saveCloudState();
+      renderScanReview();
+      renderCalendar();
+    } catch (innerError) {
+      console.error("Queued scan error state save failed", innerError);
+    }
+  } finally {
+    activeProcessingScanIds.delete(record.id);
+  }
+}
+
 function maybeResumeProcessingScans() {
   if (!supabaseClient || isApplyingCloudState || isLoadingCloudState) return;
   Object.entries(state.scanRecords || {}).forEach(([date, records]) => {
     (records || []).forEach((record) => {
       if (!record || record.status !== "processing" || !record.id || activeProcessingScanIds.has(record.id)) return;
-      const urls = processingPhotoUrlsForRecord(record);
-      if (!urls.length) return;
-      activeProcessingScanIds.add(record.id);
-      const release = () => activeProcessingScanIds.delete(record.id);
-      if (record.type === "sales-summary") {
-        invokeBackgroundParser("parse-sales-summary", {
-          storeKey: CLOUD_STORE_KEY,
-          recordId: record.id,
-          recordDate: date,
-          selectedBusinessDate: record.selectedBusinessDate || date,
-          imageUrl: urls[0],
-        })
-          .then(() => loadCloudState({ quietIfUnchanged: false }))
-          .catch((error) => {
-            console.error("Resumed sales summary parse failed", error);
-            loadCloudState({ quietIfUnchanged: false });
-          })
-          .finally(release);
-        return;
-      }
-      if (record.type === "manual-instant") {
-        invokeBackgroundParser("parse-manual-instant", {
-          storeKey: CLOUD_STORE_KEY,
-          recordId: record.id,
-          recordDate: date,
-          selectedBusinessDate: record.selectedBusinessDate || date,
-          imageUrls: urls,
-        })
-          .then(() => loadCloudState({ quietIfUnchanged: false }))
-          .catch((error) => {
-            console.error("Resumed manual instant parse failed", error);
-            loadCloudState({ quietIfUnchanged: false });
-          })
-          .finally(release);
-      }
+      processQueuedScanRecord(date, record);
     });
   });
 }
