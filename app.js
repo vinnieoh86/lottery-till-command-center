@@ -351,6 +351,7 @@ let previousDateDraft = null;
 let suppressNextMobileAutoAdvance = false;
 let endingEditModeDate = "";
 let activePrintFrame = null;
+const activeProcessingScanIds = new Set();
 
 function todayIso() {
   const today = new Date();
@@ -1301,6 +1302,7 @@ async function loadCloudState(options = {}) {
     renderTillInputs();
     setActiveView(activeView);
     restoreInputFocusState(focusState);
+    maybeResumeProcessingScans();
     setSyncStatus(`Cloud synced ${new Date(data.updated_at).toLocaleTimeString()}`);
   } catch(e) {
     setSyncStatus(`Apply error: ${e.message || "Could not apply"}`);
@@ -1353,6 +1355,63 @@ function showRealtimeBanner(message, isReview = false) {
   }
 }
 
+function processingPhotoUrlsForRecord(record) {
+  if (!record) return [];
+  if (record.type === "manual-instant") {
+    const photos = Array.isArray(record.photos) && record.photos.length
+      ? record.photos
+      : record.photo
+        ? [record.photo]
+        : [];
+    return photos.map((photo) => photo?.url).filter(Boolean);
+  }
+  return record?.photo?.url ? [record.photo.url] : [];
+}
+
+function maybeResumeProcessingScans() {
+  if (!supabaseClient || isApplyingCloudState || isLoadingCloudState) return;
+  Object.entries(state.scanRecords || {}).forEach(([date, records]) => {
+    (records || []).forEach((record) => {
+      if (!record || record.status !== "processing" || !record.id || activeProcessingScanIds.has(record.id)) return;
+      const urls = processingPhotoUrlsForRecord(record);
+      if (!urls.length) return;
+      activeProcessingScanIds.add(record.id);
+      const release = () => activeProcessingScanIds.delete(record.id);
+      if (record.type === "sales-summary") {
+        invokeBackgroundParser("parse-sales-summary", {
+          storeKey: CLOUD_STORE_KEY,
+          recordId: record.id,
+          recordDate: date,
+          selectedBusinessDate: record.selectedBusinessDate || date,
+          imageUrl: urls[0],
+        })
+          .then(() => loadCloudState({ quietIfUnchanged: false }))
+          .catch((error) => {
+            console.error("Resumed sales summary parse failed", error);
+            loadCloudState({ quietIfUnchanged: false });
+          })
+          .finally(release);
+        return;
+      }
+      if (record.type === "manual-instant") {
+        invokeBackgroundParser("parse-manual-instant", {
+          storeKey: CLOUD_STORE_KEY,
+          recordId: record.id,
+          recordDate: date,
+          selectedBusinessDate: record.selectedBusinessDate || date,
+          imageUrls: urls,
+        })
+          .then(() => loadCloudState({ quietIfUnchanged: false }))
+          .catch((error) => {
+            console.error("Resumed manual instant parse failed", error);
+            loadCloudState({ quietIfUnchanged: false });
+          })
+          .finally(release);
+      }
+    });
+  });
+}
+
 async function handleIncomingCloudChange(payload) {
   const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
   const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
@@ -1382,9 +1441,6 @@ async function handleIncomingCloudChange(payload) {
     }
     primePendingScanDraftForAdmin();
     renderScanReview();
-  } else if (state.lastSavedAt !== previousLastSaved) {
-    const savedBy = state.dailyLogs?.[activeDate]?.completedBy || state.dailyLogs?.[activeDate]?.endingCompletedBy || "another device";
-    showRealtimeBanner(`Synced from ${savedBy}`);
   }
 }
 
@@ -3615,12 +3671,13 @@ async function invokeBackgroundParser(functionName, payload) {
   return payloadResponse;
 }
 
-function triggerBackgroundSalesSummaryParse(record, imageUrl) {
+function triggerBackgroundSalesSummaryParse(record, imageUrl, recordDate = state.businessDate) {
+  activeProcessingScanIds.add(record.id);
   invokeBackgroundParser("parse-sales-summary", {
     storeKey: CLOUD_STORE_KEY,
     recordId: record.id,
-    recordDate: state.businessDate,
-    selectedBusinessDate: state.businessDate,
+    recordDate,
+    selectedBusinessDate: record.selectedBusinessDate || recordDate,
     imageUrl,
   })
     .then(() => loadCloudState({ quietIfUnchanged: false }))
@@ -3628,15 +3685,17 @@ function triggerBackgroundSalesSummaryParse(record, imageUrl) {
       console.error("Background sales summary parse failed", error);
       elements.scanParserStatus.textContent = `Background parse error: ${error.message || "Sales Summary parse failed"}`;
       loadCloudState({ quietIfUnchanged: false });
-    });
+    })
+    .finally(() => activeProcessingScanIds.delete(record.id));
 }
 
-function triggerBackgroundManualInstantParse(record, imageUrls) {
+function triggerBackgroundManualInstantParse(record, imageUrls, recordDate = state.businessDate) {
+  activeProcessingScanIds.add(record.id);
   invokeBackgroundParser("parse-manual-instant", {
     storeKey: CLOUD_STORE_KEY,
     recordId: record.id,
-    recordDate: state.businessDate,
-    selectedBusinessDate: state.businessDate,
+    recordDate,
+    selectedBusinessDate: record.selectedBusinessDate || recordDate,
     imageUrls,
   })
     .then(() => loadCloudState({ quietIfUnchanged: false }))
@@ -3644,7 +3703,8 @@ function triggerBackgroundManualInstantParse(record, imageUrls) {
       console.error("Background manual instant parse failed", error);
       elements.scanParserStatus.textContent = `Background parse error: ${error.message || "Ticket page parse failed"}`;
       loadCloudState({ quietIfUnchanged: false });
-    });
+    })
+    .finally(() => activeProcessingScanIds.delete(record.id));
 }
 
 async function uploadScanPhoto(file, targetDate) {
