@@ -350,6 +350,7 @@ let activeMobileGameIndex = 0;
 let previousDateDraft = null;
 let suppressNextMobileAutoAdvance = false;
 let endingEditModeDate = "";
+let useManualForDiff = false;
 let activePrintFrame = null;
 const activeProcessingScanIds = new Set();
 
@@ -1022,18 +1023,21 @@ function focusMobileGame(index, options = {}) {
 
   activeMobileGameIndex = Math.min(Math.max(index, 0), inputs.length - 1);
   const input = inputs[activeMobileGameIndex];
-  const preserveScroll = Boolean(options.preserveScroll);
+  // Always prevent scroll on focus — let the user control viewport position
   try {
-    input.focus({ preventScroll: preserveScroll });
+    input.focus({ preventScroll: true });
   } catch {
     input.focus();
   }
-  input.scrollIntoView({ behavior: preserveScroll ? "auto" : "smooth", block: preserveScroll ? "nearest" : "center" });
+  // Only scroll when explicitly navigating with the mobile prev/next buttons
+  if (options.scrollIntoView) {
+    input.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
   renderMobileEntryBar();
 }
 
 function focusAdjacentMobileGame(direction) {
-  focusMobileGame(activeMobileGameIndex + direction);
+  focusMobileGame(activeMobileGameIndex + direction, { scrollIntoView: true });
 }
 
 function advanceMobileEndingAfterCommit(field) {
@@ -1056,11 +1060,11 @@ function advanceMobileEndingAfterCommit(field) {
   activeMobileGameIndex = currentIndex + 1;
   window.setTimeout(() => {
     try {
+      // preventScroll: true — do NOT move the viewport; user stays where they are
       nextInput.focus({ preventScroll: true });
     } catch {
       nextInput.focus();
     }
-    nextInput.scrollIntoView({ behavior: "auto", block: "nearest" });
     renderMobileEntryBar();
   }, 70);
 }
@@ -2401,6 +2405,7 @@ function switchDate(isoDate) {
   if (endingEditModeDate && endingEditModeDate !== isoDate) endingEditModeDate = "";
   state.businessDate = isoDate;
   activeMobileGameIndex = 0;
+  useManualForDiff = false;
   document.activeElement?.blur?.();
   reconcileVisible = false;
   elements.businessDate.value = isoDate;
@@ -2829,7 +2834,21 @@ function renderCashlessTotalInput() {
 function renderTotals() {
   const instantSales = calculateInstantSales();
   const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
-  const lotterySales = calculateLotterySalesForTill(isActiveSalesSummaryReview() ? getDisplayedTill() : state.till, state.businessDate);
+  const lotterySalesBase = calculateLotterySalesForTill(isActiveSalesSummaryReview() ? getDisplayedTill() : state.till, state.businessDate);
+  // Fix 4: when toggle is on, swap manual instant into the instant sales slot for the diff
+  const instantForDiff = useManualForDiff ? manualInstant : instantSales;
+  const till = isActiveSalesSummaryReview() ? getDisplayedTill() : state.till;
+  const lotterySales = useManualForDiff
+    ? normalizeNumber(till.grossSales) -
+      normalizeNumber(till.onlineCancels) -
+      normalizeNumber(till.onlineCashes) -
+      normalizeNumber(till.instantCashes) -
+      normalizeNumber(till.cashlessOnlineSales) -
+      normalizeNumber(till.misprintWithoutCancel) -
+      normalizeNumber(till.adjustments) +
+      normalizeNumber(till.officePayout) +
+      instantForDiff
+    : lotterySalesBase;
   const cashDrawer = calculateCashDrawer();
   const difference = cashDrawer - lotterySales;
 
@@ -2837,13 +2856,15 @@ function renderTotals() {
   elements.manualInstantTotal.textContent = currency.format(manualInstant);
   elements.ticketsSoldTotal.textContent = calculateTicketsTotal();
   elements.activeBooksTotal.textContent = inventory.length;
-  elements.differenceTotal.textContent = currency.format(difference);
+  elements.differenceTotal.textContent = `${difference >= 0 ? "+" : ""}${currency.format(difference)}`;
   elements.lotterySalesTotal.textContent = currency.format(lotterySales);
   elements.cashDrawerTotal.textContent = currency.format(cashDrawer);
   elements.reportDrawerTotal.textContent = currency.format(cashDrawer);
-  elements.reportDifferenceTotal.textContent = currency.format(difference);
-  elements.differenceTotal.style.color = Math.abs(difference) > 2 ? "var(--red)" : "var(--green)";
-  elements.reportDifferenceTotal.style.color = Math.abs(difference) > 2 ? "var(--red)" : "var(--green)";
+  elements.reportDifferenceTotal.textContent = `${difference >= 0 ? "+" : ""}${currency.format(difference)}`;
+  // Blue = over (drawer has more than sales = positive), Red = under (drawer short = negative)
+  const diffColor = difference > 0.005 ? "var(--blue, #1a6bb5)" : difference < -0.005 ? "var(--red)" : "var(--green)";
+  elements.differenceTotal.style.color = diffColor;
+  elements.reportDifferenceTotal.style.color = diffColor;
   renderInstantMismatch(instantSales, manualInstant);
   elements.auditLog.textContent = JSON.stringify(buildAuditPayload(), null, 2);
   renderSummary();
@@ -4091,22 +4112,22 @@ function renderInstantMismatch(instantSales, manualInstant) {
     const v = getDisplayedManualValue(game);
     return v !== "" && v !== undefined && v !== null;
   });
-  const anySoldRows = inventory.some((game) => calculateGameSales(game) > 0 || hasDisplayedManualValue(game));
   const difference = manualInstant - instantSales;
-  const overridden = hasManualMismatchOverride(state.businessDate, instantSales, manualInstant);
-  const isMismatch = anyManualEntered && Math.abs(difference) > 0.009 && !overridden;
+  const isMismatch = anyManualEntered && Math.abs(difference) > 0.009;
   const isMatch = anyManualEntered && !isMismatch;
 
+  // When there's no mismatch, reset the toggle
+  if (!isMismatch) useManualForDiff = false;
+
   elements.instantMismatchAlert.hidden = !isMismatch;
-  elements.instantSalesCard.classList.toggle("metric-error", isMismatch);
-  elements.manualInstantCard.classList.toggle("metric-error", isMismatch);
+  elements.instantSalesCard.classList.toggle("metric-error", isMismatch && !useManualForDiff);
+  elements.manualInstantCard.classList.toggle("metric-error", isMismatch && useManualForDiff);
   elements.instantSalesCard.classList.toggle("metric-match", isMatch);
   elements.manualInstantCard.classList.toggle("metric-match", isMatch);
 
   if (isMismatch) {
-    elements.instantMismatchText.textContent = `Auto instant sales are ${currency.format(
-      instantSales,
-    )}, manual instant sold is ${currency.format(manualInstant)}, difference is ${currency.format(difference)}.`;
+    const diffSign = difference >= 0 ? "+" : "";
+    elements.instantMismatchText.textContent = `Auto instant: ${currency.format(instantSales)} | Manual instant: ${currency.format(manualInstant)} | Difference: ${diffSign}${currency.format(difference)}. Currently using ${useManualForDiff ? "MANUAL" : "AUTO"} instant for the till balance.`;
   }
 
   elements.reconcileButton.hidden = false;
@@ -4115,6 +4136,9 @@ function renderInstantMismatch(instantSales, manualInstant) {
   elements.reconcileButton.classList.toggle("reconcile-inactive-button", !reconcileVisible);
   if (elements.manualOverrideButton) {
     elements.manualOverrideButton.hidden = !isMismatch || !isAdminRole();
+    elements.manualOverrideButton.textContent = useManualForDiff
+      ? "Use Auto Instant Sales for difference"
+      : "Use Manual Instant Sold for difference";
   }
   elements.reconcilePanel.hidden = true;
 }
@@ -4259,7 +4283,7 @@ function handleEntryKeydown(event, row, fieldName) {
     const activeReviewIndex = reviewInputs.indexOf(event.target);
     const nextReviewInput = reviewInputs[activeReviewIndex + 1];
     if (nextReviewInput) {
-      nextReviewInput.focus();
+      nextReviewInput.focus({ preventScroll: true });
       nextReviewInput.select?.();
       return;
     }
@@ -4270,7 +4294,7 @@ function handleEntryKeydown(event, row, fieldName) {
   const nextInput = nextRow?.querySelector(`[data-field='${fieldName}']`);
 
   if (nextInput) {
-    nextInput.focus();
+    nextInput.focus({ preventScroll: true });
     nextInput.select();
   } else {
     focusFirstInputInGroup("cash-counts");
@@ -5729,30 +5753,9 @@ elements.reconcileButton.addEventListener("click", () => {
 elements.printReconcileButton?.addEventListener("click", () => {
   printReconcileSheet();
 });
-elements.manualOverrideButton?.addEventListener("click", async () => {
-  const instantSales = calculateInstantSales();
-  const manualInstant = isActiveManualReview() ? calculateDisplayedManualInstantSales() : calculateManualInstantSales();
-  const difference = manualInstant - instantSales;
-  const ok = await showAppConfirm({
-    eyebrow: "Override mismatch",
-    title: "Accept this instant mismatch?",
-    body: `This will mark ${state.businessDate} as manager-approved with auto ${currency.format(instantSales)}, manual ${currency.format(manualInstant)}, and difference ${currency.format(difference)}.`,
-    confirmText: "Override",
-    cancelText: "Cancel",
-  });
-  if (!ok) return;
-  const dayLog = getDayLog();
-  dayLog.manualMismatchOverride = {
-    instantSales,
-    manualInstant,
-    difference,
-    approvedBy: currentUserName(),
-    approvedAt: new Date().toISOString(),
-  };
-  persistState();
-  saveCloudState();
+elements.manualOverrideButton?.addEventListener("click", () => {
+  useManualForDiff = !useManualForDiff;
   renderTotals();
-  renderCalendar();
 });
 elements.editInventoryButton.addEventListener("click", () => {
   inventoryEditMode = !inventoryEditMode;
