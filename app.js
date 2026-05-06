@@ -1084,10 +1084,16 @@ function scheduleCloudSave() {
   }, 80);
 }
 
+function isGameEntryFieldActive() {
+  const active = document.activeElement;
+  return Boolean(active && active.matches("[data-field='todayEnding'], [data-field='manualInstantSold']"));
+}
+
 function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient) return;
+    // Skip cloud sync entirely while a game entry field is focused — avoids DOM rebuild mid-typing
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive()) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 1200);
 }
@@ -1525,7 +1531,8 @@ function maybeResumeProcessingScans() {
 async function handleIncomingCloudChange(payload) {
   const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
   const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
-  if (isApplyingCloudState || isOwnEcho) return;
+  // Don't apply cloud changes while a game entry field is focused — rebuilding DOM mid-typing causes jumps
+  if (isApplyingCloudState || isOwnEcho || isGameEntryFieldActive()) return;
   const activeDate = state.businessDate || todayIso();
   const previousScanCount = (state.scanRecords?.[activeDate] || []).length;
   const previousLastSaved = state.lastSavedAt;
