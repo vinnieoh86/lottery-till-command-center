@@ -5908,18 +5908,38 @@ elements.reportRangeButtons.forEach((button) => {
 elements.sortHeaders.forEach((button) => {
   button.addEventListener("click", () => setSummarySortFromHeader(button.dataset.sortKey));
 });
+document.addEventListener("focusout", (event) => {
+  // Clear stored focusValue on blur so a fresh tap into the same field selects-all next time
+  if (event.target.matches("input:not([type='checkbox']):not([type='date']), textarea")) {
+    delete event.target.dataset.focusValue;
+  }
+});
+
 document.addEventListener("focusin", (event) => {
   resetIdleTimer();
-  if (event.target.matches("input:not([type='checkbox']):not([type='date']), select, textarea")) {
-    event.target.dataset.focusValue = event.target.value;
-  }
-  // Auto-select only for non-game-entry fields to avoid mobile scroll/reflow
   const isGameEntryField = event.target.matches("[data-field='todayEnding'], [data-field='manualInstantSold']");
-  if (!isGameEntryField && event.target.matches("input:not([type='checkbox']):not([type='date']), textarea")) {
-    try {
-      event.target.select();
-    } catch {
-      // Some browser input types do not expose selectable text.
+
+  if (event.target.matches("input:not([type='checkbox']):not([type='date']), select, textarea")) {
+    // Read the previously stored value BEFORE overwriting it — used below to detect mid-type re-focus
+    const previousStoredValue = event.target.dataset.focusValue;
+    event.target.dataset.focusValue = event.target.value;
+
+    // Auto-select only for non-game-entry fields (mobile game fields skip to avoid scroll/reflow)
+    if (!isGameEntryField) {
+      // Only select-all when the user is freshly entering the field.
+      // If focusValue was already set and current value differs, the field was being typed
+      // into and lost focus momentarily (e.g. cloud sync restoring focus) — don't wipe input.
+      const fieldWasBeingTyped =
+        previousStoredValue !== undefined &&
+        event.target.value !== "" &&
+        event.target.value !== previousStoredValue;
+      if (!fieldWasBeingTyped) {
+        try {
+          event.target.select();
+        } catch {
+          // Some browser input types do not expose selectable text.
+        }
+      }
     }
   }
 });
