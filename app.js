@@ -2595,33 +2595,26 @@ function renderGames() {
       field.addEventListener("input", (event) => {
         updateEntry(game, field.dataset.field, event.target.value, row);
       });
-      // Fix 3: reformat manual sold as dollar value (2 decimal places) on blur
-        if (field.dataset.field === "manualInstantSold") {
-          field.addEventListener("blur", () => {
-            if (field.value !== "") {
-              field.value = normalizeNumber(field.value).toFixed(2);
-            }
-          });
-        }
-        if (field.dataset.field === "todayEnding") {
-          field.addEventListener("blur", () => {
-            const previousValue = field.dataset.previousValue ?? "";
-            if (String(previousValue) === String(field.value)) return;
-            advanceMobileEndingAfterCommit(field);
-          });
-        }
-        field.addEventListener("focus", () => {
-          field.dataset.previousValue = field.value;
+      // Reformat manual sold to 2dp on blur — no focus jump triggered here
+      if (field.dataset.field === "manualInstantSold") {
+        field.addEventListener("blur", () => {
+          if (field.value !== "") {
+            field.value = normalizeNumber(field.value).toFixed(2);
+          }
+        });
+      }
+      field.addEventListener("focus", () => {
+        field.dataset.previousValue = field.value;
         if (field.dataset.field === "todayEnding") {
           activeMobileGameIndex = rowIndex;
           renderMobileEntryBar();
         }
-        // FIX 8: warn on ANY touch of todayEnding when ending is locked (both roles)
+        // Warn when ending is locked
         if (field.dataset.field === "todayEnding" && isEndingCompleted() && !isEndingEditMode() && !field._endingWarnShown) {
           field._endingWarnShown = true;
           field.blur();
           showAppConfirm({
-            eyebrow: "âš ï¸ Endings locked",
+            eyebrow: "⚠️ Endings locked",
             title: "All endings are complete",
             body: `All today's ending counts are locked for ${state.businessDate}. Use "Edit day" to make adjustments, or "Clear endings" to reset the day.`,
             confirmText: "OK",
@@ -2643,8 +2636,7 @@ function renderGames() {
           if (!ok) return;
           field.dataset.previousValue = field.value;
         }
-        if (field.dataset.field !== "todayEnding") return;
-        advanceMobileEndingAfterCommit(field);
+        // Advance is intentionally NOT triggered on change/blur — Enter key only (see keydown)
       });
       field.addEventListener("keydown", (event) => handleEntryKeydown(event, row, field.dataset.field));
     });
@@ -4196,6 +4188,13 @@ function renderReconciliationRows() {
   });
 }
 
+// Debounced renderTotals — avoids layout thrashing on rapid keystrokes in game entry fields
+let _renderTotalsTimer = null;
+function renderTotalsDebounced() {
+  if (_renderTotalsTimer) window.clearTimeout(_renderTotalsTimer);
+  _renderTotalsTimer = window.setTimeout(() => { _renderTotalsTimer = null; renderTotals(); }, 120);
+}
+
 function updateEntry(game, key, value, row) {
   const field = row?.querySelector(`[data-field='${key}']`);
   if (!canEditActiveDay(field)) {
@@ -4264,7 +4263,8 @@ function updateEntry(game, key, value, row) {
   if (!manualPreviewActive) {
     persistIfLiveDate();
   }
-  renderTotals();
+  // Debounced to avoid layout thrash on every keystroke during game entry
+  renderTotalsDebounced();
   if (manualPreviewActive) {
     renderReconciliationRows();
     renderScanReview();
@@ -4394,25 +4394,25 @@ async function autoCompleteEndingDayIfReady() {
   saveCloudState();
   hydrateActiveDay();
   renderCalendar();
-  // Only re-render game rows if no input is currently focused â€” avoids wiping active entry
-  const activeField = document.activeElement;
-  const isEntryFocused = activeField && activeField.closest("#gameRows");
-  if (!isEntryFocused) {
-    renderGames();
-  } else {
-    // Minimal update: just toggle the lock class without destroying DOM
-    elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
-    // Reapply lock state to all fields except the one being typed in
-    elements.gameRows.querySelectorAll("[data-field='todayEnding']").forEach((f) => {
-      if (f === activeField) return;
-      if (isAdminRole()) {
-        f.classList.add("ending-locked-field");
-      } else {
-        f.disabled = true;
-      }
-    });
-  }
-  renderTotals();
+  // Defer DOM re-render so it never interrupts the current keypress/input event loop
+  window.setTimeout(() => {
+    const activeField = document.activeElement;
+    const isEntryFocused = activeField && activeField.closest("#gameRows");
+    if (!isEntryFocused) {
+      renderGames();
+    } else {
+      elements.dailyEntrySection.classList.toggle("ending-completed", isEndingCompleted());
+      elements.gameRows.querySelectorAll("[data-field='todayEnding']").forEach((f) => {
+        if (f === activeField) return;
+        if (isAdminRole()) {
+          f.classList.add("ending-locked-field");
+        } else {
+          f.disabled = true;
+        }
+      });
+    }
+    renderTotals();
+  }, 400);
 }
 
 function buildMonth() {
@@ -5906,8 +5906,9 @@ document.addEventListener("focusin", (event) => {
   if (event.target.matches("input:not([type='checkbox']):not([type='date']), select, textarea")) {
     event.target.dataset.focusValue = event.target.value;
   }
-
-  if (event.target.matches("input:not([type='checkbox']):not([type='date']), textarea")) {
+  // Auto-select only for non-game-entry fields to avoid mobile scroll/reflow
+  const isGameEntryField = event.target.matches("[data-field='todayEnding'], [data-field='manualInstantSold']");
+  if (!isGameEntryField && event.target.matches("input:not([type='checkbox']):not([type='date']), textarea")) {
     try {
       event.target.select();
     } catch {
