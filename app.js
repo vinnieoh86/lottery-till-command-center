@@ -3358,6 +3358,20 @@ function renderScanReview() {
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
+  // Add "View all as PDF" button if there are any saved photos across all records
+  const allSavedPhotoUrls = savedRecords.flatMap((record) => {
+    const photos = record.photos?.length ? record.photos : record.photo ? [record.photo] : [];
+    return photos.map((photo) => ({ url: photo?.url || photo?.dataUrl || "", name: photo?.name || "scan.jpg", savedAt: record.savedAt, type: record.type })).filter((p) => p.url);
+  });
+  if (allSavedPhotoUrls.length) {
+    const pdfBtn = document.createElement("button");
+    pdfBtn.type = "button";
+    pdfBtn.className = "ghost-button scan-pdf-all-button";
+    pdfBtn.textContent = `View all ${allSavedPhotoUrls.length} photo${allSavedPhotoUrls.length === 1 ? "" : "s"} as PDF`;
+    pdfBtn.addEventListener("click", () => openScanPhotosPdf(allSavedPhotoUrls));
+    elements.scanPhotoPreview.appendChild(pdfBtn);
+  }
+
   elements.scanReviewRows.querySelectorAll("[data-review-scan-index]").forEach((button) => {
     button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
   });
@@ -3395,6 +3409,30 @@ function renderScanReview() {
         : manualBatchWaiting
           ? `Added ${files.length} ticket page${files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`
           : "Photos are compressed and ready to parse.";
+}
+
+function openScanPhotosPdf(photoList) {
+  // Build a single-page HTML document with all photos scaled to fit,
+  // then open it in a new tab so the user can print/save as PDF.
+  const photoHtml = photoList.map((photo, index) => {
+    const label = (photo.type === 'sales-summary' ? 'Sales Summary' : 'Manual Instant') + ' — Saved ' + new Date(photo.savedAt).toLocaleString();
+    return '<div class="scan-page"><p class="scan-label">' + (index + 1) + '. ' + label + '</p><img src="' + photo.url + '" alt="Scan ' + (index + 1) + '" /></div>';
+  }).join('');
+
+  const dateLabel = state.businessDate;
+  const countLabel = photoList.length + ' photo' + (photoList.length === 1 ? '' : 's');
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8" /><title>Lottery Scans — ' + dateLabel + '</title><style>* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: sans-serif; background: #fff; } @media print { .no-print { display: none; } .scan-page { page-break-inside: avoid; } } .no-print { background: #1a1a1a; color: #fff; padding: 10px 16px; font-size: 13px; display: flex; align-items: center; gap: 12px; } .no-print button { background: #fff; color: #1a1a1a; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; } h1 { font-size: 14px; padding: 10px 16px 4px; color: #444; } .scan-page { padding: 8px 16px 16px; border-bottom: 1px solid #e0e0e0; } .scan-label { font-size: 11px; color: #666; margin-bottom: 6px; } .scan-page img { max-width: 100%; height: auto; display: block; border: 1px solid #ccc; border-radius: 4px; }</style></head><body><div class="no-print"><span>Lottery Scans — ' + dateLabel + ' (' + countLabel + ')</span><button onclick="window.print()">Print / Save as PDF</button></div><h1>Lottery Scans — ' + dateLabel + '</h1>' + photoHtml + '</body></html>';
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lottery-scans-' + dateLabel + '.html';
+    a.click();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 async function parseSalesSummaryScan() {
@@ -5941,6 +5979,16 @@ document.addEventListener("focusin", (event) => {
         }
       }
     }
+  }
+});
+
+// Select-all on click for manual sold $ inputs (tap/click to highlight value)
+document.addEventListener("click", (event) => {
+  if (!event.target.matches("[data-field='manualInstantSold']")) return;
+  try {
+    event.target.select();
+  } catch {
+    // Ignore inputs that do not support select().
   }
 });
 document.addEventListener(
