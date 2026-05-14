@@ -1093,8 +1093,7 @@ function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
     // Skip cloud sync entirely while a game entry field is focused — avoids DOM rebuild mid-typing
-    // Also skip while inventory edit mode is active — avoids overwriting in-progress edits
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive() || inventoryEditMode) return;
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive()) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 1200);
 }
@@ -1306,20 +1305,7 @@ async function loadCloudState(options = {}) {
       businessDate: activeDate,
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
-    // Never replace inventory from cloud while the user is actively editing it.
-    // Outside edit mode, use whichever version has the newer inventoryUpdatedAt timestamp.
-    if (!inventoryEditMode) {
-      const localTs = state.inventory?.[0]?._inventoryUpdatedAt || "";
-      const cloudTs = cloudState.inventory?.[0]?._inventoryUpdatedAt || "";
-      if (cloudTs >= localTs) {
-        inventory = state.inventory || inventory;
-      }
-      // else: local is newer, keep current inventory (don't overwrite)
-    }
-    // If local inventory is newer than cloud, flag for push-back
-    const localInventoryTs = inventory[0]?._inventoryUpdatedAt || "";
-    const cloudInventoryTs = cloudState.inventory?.[0]?._inventoryUpdatedAt || "";
-    if (localInventoryTs > cloudInventoryTs) _mergeHadLocalNewer = true;
+    inventory = state.inventory || inventory;
     writeLocalState();
     hydrateActiveDay();
     render();
@@ -2538,6 +2524,9 @@ function renderGames() {
         }
       } else if (key === "box" && inventoryEditMode) {
         field.innerHTML = `<span class="drag-handle" title="Drag to reorder">::</span><strong>${game.box}</strong>`;
+      } else if (key === "box") {
+        const isDc = Boolean(state.orderDc[id]);
+        field.innerHTML = `<button type="button" class="box-dc-btn${isDc ? " is-dc" : ""}" data-dc-toggle="${id}" title="${isDc ? "DC — click to reactivate" : "Click to mark DC"}">${game.box}</button>`;
       } else {
         field.textContent = key === "value" ? formatGameValue(game) : game[key] || "-";
       }
@@ -2680,31 +2669,42 @@ function renderGames() {
       });
       row.querySelectorAll("[data-inventory-field]").forEach((input) => {
         input.addEventListener("input", (event) => {
-          const field = event.target.dataset.inventoryField;
-          if (field === "value") {
-            // Select dropdown — save immediately
-            updateInventoryField(id, field, event.target.value);
-          } else {
-            // Text fields (name, bookNumber): store raw value in memory only — no cloud save mid-keystroke
-            const game = inventory.find((item) => gameId(item) === id);
-            if (game) game[field] = event.target.value;
-          }
+          updateInventoryField(id, event.target.dataset.inventoryField, event.target.value);
         });
-        input.addEventListener("blur", () => {
-          const field = input.dataset.inventoryField;
-          if (field === "value") return; // already saved on input
-          // On blur: apply normalization then do one clean persist + cloud save
-          updateInventoryField(id, field, input.value);
-          if (field === "bookNumber") {
+        input.addEventListener("change", () => {
+          if (input.dataset.inventoryField === "bookNumber") {
             const game = inventory.find((item) => gameId(item) === id);
-            // Quietly update the displayed value without re-rendering the whole table
-            if (game) input.value = game.bookNumber || "";
+            input.value = game?.bookNumber || "";
           }
           renderOrderSheet();
           renderSummary();
           renderMonthMatrix();
         });
         input.addEventListener("keydown", handleGroupedEnterKeydown);
+      });
+    }
+
+    // Wire DC toggle button in box cell
+    const dcBtn = row.querySelector("[data-dc-toggle]");
+    if (dcBtn && !inventoryEditMode) {
+      dcBtn.addEventListener("click", async () => {
+        const toggleId = dcBtn.dataset.dcToggle;
+        const currentDc = Boolean(state.orderDc[toggleId]);
+        const toggleGame = inventory.find((item) => gameId(item) === toggleId);
+        const ok = await showAppConfirm({
+          eyebrow: "DC safety check",
+          title: currentDc ? "Remove DC from this game?" : "Mark this game DC?",
+          body: `Box ${toggleGame?.box || toggleId} ${toggleGame?.bookNumber || ""} ${toggleGame?.name || ""}. This updates every list (order sheet, history, month view).`,
+          confirmText: currentDc ? "Remove DC" : "Mark DC",
+          cancelText: "Cancel",
+        });
+        if (!ok) return;
+        state.orderDc[toggleId] = !currentDc;
+        persistState();
+        renderGames();
+        renderOrderSheet();
+        renderSummary();
+        renderMonthMatrix();
       });
     }
 
@@ -2728,9 +2728,6 @@ function updateInventoryField(id, field, value) {
   } else {
     game[field] = value;
   }
-  // Stamp a timestamp on inventory so cloud merge knows this device has the latest version
-  const ts = new Date().toISOString();
-  inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
   persistState();
 }
 
@@ -2743,8 +2740,6 @@ function reorderInventory(fromId, toId) {
 
   const [movedGame] = inventory.splice(fromIndex, 1);
   inventory.splice(toIndex, 0, movedGame);
-  const ts = new Date().toISOString();
-  inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
   persistState();
   render();
 }
@@ -4329,6 +4324,21 @@ function handleEntryKeydown(event, row, fieldName) {
   }
   const rows = Array.from(elements.gameRows.querySelectorAll("tr"));
   const currentIndex = rows.indexOf(row);
+
+  // For manualInstantSold: skip disabled rows and find next enabled cell
+  if (fieldName === "manualInstantSold") {
+    for (let i = currentIndex + 1; i < rows.length; i++) {
+      const candidate = rows[i].querySelector("[data-field='manualInstantSold']");
+      if (candidate && !candidate.disabled) {
+        candidate.focus({ preventScroll: true });
+        try { candidate.select(); } catch { /* ignore */ }
+        return;
+      }
+    }
+    focusFirstInputInGroup("cash-counts");
+    return;
+  }
+
   const nextRow = rows[currentIndex + 1];
   const nextInput = nextRow?.querySelector(`[data-field='${fieldName}']`);
 
@@ -5800,17 +5810,6 @@ elements.editInventoryButton.addEventListener("click", () => {
   inventoryEditMode = !inventoryEditMode;
   elements.editInventoryButton.textContent = inventoryEditMode ? "Lock inventory" : "Edit inventory";
   elements.editInventoryButton.classList.toggle("active-edit", inventoryEditMode);
-  if (!inventoryEditMode) {
-    // Flush any field that still has focus so its blur handler fires and saves the value
-    if (document.activeElement?.dataset?.inventoryField) {
-      document.activeElement.blur();
-    }
-    // Force an immediate cloud push so the saved inventory can't be overwritten by a stale poll
-    const ts = new Date().toISOString();
-    inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
-    persistState();
-    saveCloudState();
-  }
   renderGames();
 });
 elements.editDayButton?.addEventListener("click", toggleEditDayMode);
@@ -5958,6 +5957,12 @@ document.addEventListener("focusout", (event) => {
   }
 });
 
+// Select-all on click for manual sold $ inputs
+document.addEventListener("click", (event) => {
+  if (event.target.matches("[data-field='manualInstantSold']")) {
+    try { event.target.select(); } catch { /* ignore */ }
+  }
+});
 document.addEventListener("focusin", (event) => {
   resetIdleTimer();
   const isGameEntryField = event.target.matches("[data-field='todayEnding'], [data-field='manualInstantSold']");
