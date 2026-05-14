@@ -1093,7 +1093,8 @@ function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
     // Skip cloud sync entirely while a game entry field is focused — avoids DOM rebuild mid-typing
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive()) return;
+    // Also skip while inventory edit mode is active — avoids overwriting in-progress edits
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive() || inventoryEditMode) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 1200);
 }
@@ -1266,32 +1267,23 @@ async function loadCloudState(options = {}) {
         };
       });
 
-      // Merge till and cashCounts independently using their own timestamps
+      // Merge till and cashCounts: use whichever log has the newer savedAt
       const localSavedAt = localLog.savedAt || "";
       const cloudSavedAt = cloudLog.savedAt || "";
       const useLocalTill = localSavedAt > cloudSavedAt;
       if (useLocalTill) _mergeHadLocalNewer = true;
-
-      // Cash counts get their own timestamp so a phone doing endings doesn't wipe a laptop's cash drawer
-      const localCashTs = localLog.cashCountsUpdatedAt || localLog.savedAt || "";
-      const cloudCashTs = cloudLog.cashCountsUpdatedAt || cloudLog.savedAt || "";
-      const useLocalCash = localCashTs > cloudCashTs;
-      if (useLocalCash) _mergeHadLocalNewer = true;
 
       mergedDailyLogs[date] = {
         ...cloudLog,
         entries: mergedEntries,
         ...(useLocalTill ? {
           till: localLog.till,
+          cashCounts: localLog.cashCounts,
           savedAt: localLog.savedAt,
           completedAt: localLog.completedAt,
           completedBy: localLog.completedBy,
           endingCompletedAt: localLog.endingCompletedAt,
           endingCompletedBy: localLog.endingCompletedBy,
-        } : {}),
-        ...(useLocalCash ? {
-          cashCounts: localLog.cashCounts,
-          cashCountsUpdatedAt: localLog.cashCountsUpdatedAt,
         } : {}),
       };
     });
@@ -1307,24 +1299,27 @@ async function loadCloudState(options = {}) {
     })();
 
     const focusState = captureInputFocusState();
-    // Merge pinSettings: keep union of local + cloud users so neither side loses added users
-    const mergedPinSettings = {
-      ...(cloudState.pinSettings || {}),
-      admin: (state.pinSettings?.admin || cloudState.pinSettings?.admin || "1986"),
-      users: mergePinUsers(
-        state.pinSettings?.users || [],
-        cloudState.pinSettings?.users || [],
-      ),
-    };
     state = normalizeStoredState({
       ...cloudState,
       dailyLogs: mergedDailyLogs,
       till: mergedTill,
       businessDate: activeDate,
-      pinSettings: mergedPinSettings,
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
-    inventory = state.inventory || inventory;
+    // Never replace inventory from cloud while the user is actively editing it.
+    // Outside edit mode, use whichever version has the newer inventoryUpdatedAt timestamp.
+    if (!inventoryEditMode) {
+      const localTs = state.inventory?.[0]?._inventoryUpdatedAt || "";
+      const cloudTs = cloudState.inventory?.[0]?._inventoryUpdatedAt || "";
+      if (cloudTs >= localTs) {
+        inventory = state.inventory || inventory;
+      }
+      // else: local is newer, keep current inventory (don't overwrite)
+    }
+    // If local inventory is newer than cloud, flag for push-back
+    const localInventoryTs = inventory[0]?._inventoryUpdatedAt || "";
+    const cloudInventoryTs = cloudState.inventory?.[0]?._inventoryUpdatedAt || "";
+    if (localInventoryTs > cloudInventoryTs) _mergeHadLocalNewer = true;
     writeLocalState();
     hydrateActiveDay();
     render();
@@ -2012,13 +2007,7 @@ function syncActiveDayDraft() {
   const dayLog = getDayLog();
   state.till = normalizeTill(state.till);
   dayLog.till = { ...state.till };
-  // Only update cashCounts if the local value is non-empty or already has a timestamp
-  // (prevents an empty phone session from blanking out a filled-in laptop session)
-  const hasAnyCashValue = Object.values(state.cashCounts || {}).some((v) => normalizeNumber(v) !== 0);
-  if (hasAnyCashValue || !dayLog.cashCountsUpdatedAt) {
-    dayLog.cashCounts = { ...state.cashCounts };
-    dayLog.cashCountsUpdatedAt = new Date().toISOString();
-  }
+  dayLog.cashCounts = { ...state.cashCounts };
 }
 
 function isCompletedDay(date = state.businessDate) {
@@ -2193,13 +2182,6 @@ function captureInputFocusState() {
     return stateSnapshot;
   }
 
-  // Inventory edit inputs (bookNumber, name, value)
-  if (row && active.dataset.inventoryField) {
-    stateSnapshot.selector = `tr[data-inventory-id="${row.dataset.inventoryId}"] [data-inventory-field="${active.dataset.inventoryField}"]`;
-    stateSnapshot.isInventoryEdit = true;
-    return stateSnapshot;
-  }
-
   if (active.dataset.enterGroup && active.dataset.enterIndex) {
     stateSnapshot.selector = `[data-enter-group="${active.dataset.enterGroup}"][data-enter-index="${active.dataset.enterIndex}"]`;
     return stateSnapshot;
@@ -2213,16 +2195,6 @@ function restoreInputFocusState(focusState) {
   const nextInput = document.querySelector(focusState.selector);
   if (!nextInput || nextInput.disabled) return;
   nextInput.focus({ preventScroll: true });
-  // For inventory edit inputs, restore the in-progress typed value so sync doesn't wipe it
-  if (focusState.isInventoryEdit && focusState.value !== undefined) {
-    nextInput.value = focusState.value;
-    if (focusState.selectionStart !== null && typeof nextInput.setSelectionRange === "function") {
-      try {
-        nextInput.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart);
-      } catch { /* ignore */ }
-    }
-    return;
-  }
   if (focusState.selectionStart !== null && typeof nextInput.setSelectionRange === "function") {
     try {
       nextInput.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart);
@@ -2572,26 +2544,7 @@ function renderGames() {
     });
     // Apply dc-row in ALL views including daily entry
     row.classList.toggle("dc-row", Boolean(state.orderDc[gameId(game)]));
-    const prevEndingEl = row.querySelector("[data-output='previousEnding']");
-    const prevEndingVal = getPreviousEnding(game);
-    if (inventoryEditMode) {
-      // In inventory edit mode, allow editing yesterday's ending for changed games
-      const prevDate = previousOpenDate(state.businessDate);
-      prevEndingEl.innerHTML = `<input class="inventory-edit-input inventory-prev-ending-input" type="number" min="0" step="1" inputmode="numeric" title="Yesterday's ending (${prevDate})" value="${prevEndingVal}" style="width:4.5em" />`;
-      const prevInput = prevEndingEl.querySelector("input");
-      prevInput.addEventListener("input", (event) => {
-        const prevLog = state.dailyLogs[prevDate];
-        if (!prevLog) return;
-        prevLog.entries = prevLog.entries || {};
-        prevLog.entries[id] = prevLog.entries[id] || {};
-        prevLog.entries[id].todayEnding = normalizeNumber(event.target.value);
-        prevLog.entries[id].todayEndingUpdatedAt = new Date().toISOString();
-        prevLog.entries[id].todayEndingUpdatedBy = currentUserName();
-        persistState();
-      });
-    } else {
-      prevEndingEl.textContent = prevEndingVal;
-    }
+    row.querySelector("[data-output='previousEnding']").textContent = getPreviousEnding(game);
     row.querySelector("[data-field='todayEnding']").value = entry.todayEnding;
     const displayedManualValue = getDisplayedManualValue(game);
     row.querySelector("[data-field='manualInstantSold']").value =
@@ -2728,23 +2681,24 @@ function renderGames() {
       row.querySelectorAll("[data-inventory-field]").forEach((input) => {
         input.addEventListener("input", (event) => {
           const field = event.target.dataset.inventoryField;
-          // For bookNumber and name, save raw value while typing (no reformatting mid-keystroke).
-          // bookNumber gets padded/trimmed on blur instead.
-          if (field === "bookNumber" || field === "name") {
+          if (field === "value") {
+            // Select dropdown — save immediately
+            updateInventoryField(id, field, event.target.value);
+          } else {
+            // Text fields (name, bookNumber): store raw value in memory only — no cloud save mid-keystroke
             const game = inventory.find((item) => gameId(item) === id);
             if (game) game[field] = event.target.value;
-            persistState();
-          } else {
-            updateInventoryField(id, field, event.target.value);
           }
         });
         input.addEventListener("blur", () => {
-          // On blur, apply bookNumber formatting and save final value
-          if (input.dataset.inventoryField === "bookNumber") {
-            updateInventoryField(id, "bookNumber", input.value);
+          const field = input.dataset.inventoryField;
+          if (field === "value") return; // already saved on input
+          // On blur: apply normalization then do one clean persist + cloud save
+          updateInventoryField(id, field, input.value);
+          if (field === "bookNumber") {
             const game = inventory.find((item) => gameId(item) === id);
-            // Update the displayed value to the normalized form without re-rendering the whole table
-            input.value = game?.bookNumber || "";
+            // Quietly update the displayed value without re-rendering the whole table
+            if (game) input.value = game.bookNumber || "";
           }
           renderOrderSheet();
           renderSummary();
@@ -2774,6 +2728,9 @@ function updateInventoryField(id, field, value) {
   } else {
     game[field] = value;
   }
+  // Stamp a timestamp on inventory so cloud merge knows this device has the latest version
+  const ts = new Date().toISOString();
+  inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
   persistState();
 }
 
@@ -2786,6 +2743,8 @@ function reorderInventory(fromId, toId) {
 
   const [movedGame] = inventory.splice(fromIndex, 1);
   inventory.splice(toIndex, 0, movedGame);
+  const ts = new Date().toISOString();
+  inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
   persistState();
   render();
 }
@@ -5841,6 +5800,17 @@ elements.editInventoryButton.addEventListener("click", () => {
   inventoryEditMode = !inventoryEditMode;
   elements.editInventoryButton.textContent = inventoryEditMode ? "Lock inventory" : "Edit inventory";
   elements.editInventoryButton.classList.toggle("active-edit", inventoryEditMode);
+  if (!inventoryEditMode) {
+    // Flush any field that still has focus so its blur handler fires and saves the value
+    if (document.activeElement?.dataset?.inventoryField) {
+      document.activeElement.blur();
+    }
+    // Force an immediate cloud push so the saved inventory can't be overwritten by a stale poll
+    const ts = new Date().toISOString();
+    inventory.forEach((g) => { g._inventoryUpdatedAt = ts; });
+    persistState();
+    saveCloudState();
+  }
   renderGames();
 });
 elements.editDayButton?.addEventListener("click", toggleEditDayMode);
