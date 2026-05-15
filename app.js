@@ -1093,7 +1093,7 @@ function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
     // Skip cloud sync entirely while a game entry field is focused — avoids DOM rebuild mid-typing
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive()) return;
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive() || inventoryEditMode) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 1200);
 }
@@ -1272,17 +1272,24 @@ async function loadCloudState(options = {}) {
       const useLocalTill = localSavedAt > cloudSavedAt;
       if (useLocalTill) _mergeHadLocalNewer = true;
 
+      const localCashTs = localLog.cashCountsUpdatedAt || localLog.savedAt || "";
+      const cloudCashTs = cloudLog.cashCountsUpdatedAt || cloudLog.savedAt || "";
+      const useLocalCash = localCashTs > cloudCashTs;
+      if (useLocalCash) _mergeHadLocalNewer = true;
       mergedDailyLogs[date] = {
         ...cloudLog,
         entries: mergedEntries,
         ...(useLocalTill ? {
           till: localLog.till,
-          cashCounts: localLog.cashCounts,
           savedAt: localLog.savedAt,
           completedAt: localLog.completedAt,
           completedBy: localLog.completedBy,
           endingCompletedAt: localLog.endingCompletedAt,
           endingCompletedBy: localLog.endingCompletedBy,
+        } : {}),
+        ...(useLocalCash ? {
+          cashCounts: localLog.cashCounts,
+          cashCountsUpdatedAt: localLog.cashCountsUpdatedAt,
         } : {}),
       };
     });
@@ -1298,14 +1305,37 @@ async function loadCloudState(options = {}) {
     })();
 
     const focusState = captureInputFocusState();
+    const mergedPinSettings = {
+      ...(cloudState.pinSettings || {}),
+      admin: state.pinSettings?.admin || cloudState.pinSettings?.admin || "1986",
+      users: mergePinUsers([
+        ...(state.pinSettings?.users || []),
+        ...(cloudState.pinSettings?.users || []),
+      ]),
+    };
     state = normalizeStoredState({
       ...cloudState,
       dailyLogs: mergedDailyLogs,
       till: mergedTill,
       businessDate: activeDate,
+      pinSettings: mergedPinSettings,
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
-    inventory = state.inventory || inventory;
+    // Never replace inventory from cloud while the user is actively editing it.
+    // Outside edit mode, use whichever version has the newer _inventoryUpdatedAt timestamp.
+    if (!inventoryEditMode) {
+      const localTs = inventory[0]?._inventoryUpdatedAt || "";
+      const cloudTs = (state.inventory || [])[0]?._inventoryUpdatedAt || "";
+      if (cloudTs >= localTs) {
+        inventory = state.inventory || inventory;
+      }
+    }
+    // If local inventory is newer, flag for push-back
+    {
+      const localTs2 = inventory[0]?._inventoryUpdatedAt || "";
+      const cloudTs2 = (cloudState.inventory || [])[0]?._inventoryUpdatedAt || "";
+      if (localTs2 > cloudTs2) _mergeHadLocalNewer = true;
+    }
     writeLocalState();
     hydrateActiveDay();
     render();
@@ -1993,7 +2023,11 @@ function syncActiveDayDraft() {
   const dayLog = getDayLog();
   state.till = normalizeTill(state.till);
   dayLog.till = { ...state.till };
-  dayLog.cashCounts = { ...state.cashCounts };
+  const hasAnyCashValue = Object.values(state.cashCounts || {}).some((v) => normalizeNumber(v) !== 0);
+  if (hasAnyCashValue || !dayLog.cashCountsUpdatedAt) {
+    dayLog.cashCounts = { ...state.cashCounts };
+    dayLog.cashCountsUpdatedAt = new Date().toISOString();
+  }
 }
 
 function isCompletedDay(date = state.businessDate) {
@@ -2168,6 +2202,15 @@ function captureInputFocusState() {
     return stateSnapshot;
   }
 
+  if (active.dataset.inventoryField) {
+    const invRow = active.closest("tr[data-inventory-id]");
+    if (invRow) {
+      stateSnapshot.selector = `tr[data-inventory-id="${invRow.dataset.inventoryId}"] [data-inventory-field="${active.dataset.inventoryField}"]`;
+      stateSnapshot.isInventoryEdit = true;
+      return stateSnapshot;
+    }
+  }
+
   if (active.dataset.enterGroup && active.dataset.enterIndex) {
     stateSnapshot.selector = `[data-enter-group="${active.dataset.enterGroup}"][data-enter-index="${active.dataset.enterIndex}"]`;
     return stateSnapshot;
@@ -2181,6 +2224,13 @@ function restoreInputFocusState(focusState) {
   const nextInput = document.querySelector(focusState.selector);
   if (!nextInput || nextInput.disabled) return;
   nextInput.focus({ preventScroll: true });
+  if (focusState.isInventoryEdit && focusState.value !== undefined) {
+    nextInput.value = focusState.value;
+    if (focusState.selectionStart !== null && typeof nextInput.setSelectionRange === "function") {
+      try { nextInput.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart); } catch { /* ignore */ }
+    }
+    return;
+  }
   if (focusState.selectionStart !== null && typeof nextInput.setSelectionRange === "function") {
     try {
       nextInput.setSelectionRange(focusState.selectionStart, focusState.selectionEnd ?? focusState.selectionStart);
@@ -2669,10 +2719,20 @@ function renderGames() {
       });
       row.querySelectorAll("[data-inventory-field]").forEach((input) => {
         input.addEventListener("input", (event) => {
-          updateInventoryField(id, event.target.dataset.inventoryField, event.target.value);
+          const field = event.target.dataset.inventoryField;
+          if (field === "value") {
+            updateInventoryField(id, field, event.target.value);
+          } else {
+            // Text fields: store raw value in memory only — no cloud save mid-keystroke
+            const game = inventory.find((item) => gameId(item) === id);
+            if (game) game[field] = event.target.value;
+          }
         });
-        input.addEventListener("change", () => {
-          if (input.dataset.inventoryField === "bookNumber") {
+        input.addEventListener("blur", () => {
+          const field = input.dataset.inventoryField;
+          if (field === "value") return; // already saved on input
+          updateInventoryField(id, field, input.value);
+          if (field === "bookNumber") {
             const game = inventory.find((item) => gameId(item) === id);
             input.value = game?.bookNumber || "";
           }
@@ -2684,7 +2744,6 @@ function renderGames() {
       });
     }
 
-    // Wire DC toggle button in box cell
     const dcBtn = row.querySelector("[data-dc-toggle]");
     if (dcBtn && !inventoryEditMode) {
       dcBtn.addEventListener("click", async () => {
@@ -2694,7 +2753,7 @@ function renderGames() {
         const ok = await showAppConfirm({
           eyebrow: "DC safety check",
           title: currentDc ? "Remove DC from this game?" : "Mark this game DC?",
-          body: `Box ${toggleGame?.box || toggleId} ${toggleGame?.bookNumber || ""} ${toggleGame?.name || ""}. This updates every list (order sheet, history, month view).`,
+          body: `Box ${toggleGame?.box || toggleId} ${toggleGame?.bookNumber || ""} ${toggleGame?.name || ""}. This updates every list.`,
           confirmText: currentDc ? "Remove DC" : "Mark DC",
           cancelText: "Cancel",
         });
@@ -2728,6 +2787,8 @@ function updateInventoryField(id, field, value) {
   } else {
     game[field] = value;
   }
+  const _ts = new Date().toISOString();
+  inventory.forEach((g) => { g._inventoryUpdatedAt = _ts; });
   persistState();
 }
 
@@ -2740,6 +2801,8 @@ function reorderInventory(fromId, toId) {
 
   const [movedGame] = inventory.splice(fromIndex, 1);
   inventory.splice(toIndex, 0, movedGame);
+  const _rts = new Date().toISOString();
+  inventory.forEach((g) => { g._inventoryUpdatedAt = _rts; });
   persistState();
   render();
 }
@@ -3324,6 +3387,11 @@ function renderScanReview() {
                 : `${record.parsedReportDate || state.businessDate}${record.status === "pending-review" ? " - NEEDS REVIEW" : ""}`
           }</strong>
           ${
+            record.status === "parse-error"
+              ? `<button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">View photos as PDF</button>`
+              : ""
+          }
+          ${
             isAdminRole() && record.status === "pending-review"
               ? `<button class="ghost-button review-scan-button" type="button" data-review-scan-index="${savedRecords.indexOf(record)}">Review scan</button>`
               : ""
@@ -3385,6 +3453,35 @@ function renderScanReview() {
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
+  // "View all as PDF" button
+  const allSavedPhotoUrls = savedRecords.flatMap((record) => {
+    const photos = record.photos?.length ? record.photos : record.photo ? [record.photo] : [];
+    return photos.map((photo) => ({ url: photo?.url || photo?.dataUrl || "", name: photo?.name || "scan.jpg", savedAt: record.savedAt, type: record.type })).filter((p) => p.url);
+  });
+  if (allSavedPhotoUrls.length) {
+    const pdfBtn = document.createElement("button");
+    pdfBtn.type = "button";
+    pdfBtn.className = "ghost-button scan-pdf-all-button";
+    pdfBtn.textContent = `View all ${allSavedPhotoUrls.length} photo${allSavedPhotoUrls.length === 1 ? "" : "s"} as PDF`;
+    pdfBtn.addEventListener("click", () => openScanPhotosPdf(allSavedPhotoUrls));
+    elements.scanPhotoPreview.appendChild(pdfBtn);
+  }
+
+  elements.scanReviewRows.querySelectorAll("[data-parse-error-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const record = savedRecords[Number(button.dataset.parseErrorIndex)];
+      if (!record) return;
+      const photos = record.photos?.length ? record.photos : record.photo ? [record.photo] : [];
+      const photoList = photos
+        .map((photo) => ({ url: photo?.url || photo?.dataUrl || "", name: photo?.name || "scan.jpg", savedAt: record.savedAt, type: record.type }))
+        .filter((p) => p.url);
+      if (!photoList.length) {
+        alert("No accessible photos found for this record.");
+        return;
+      }
+      openScanPhotosPdf(photoList);
+    });
+  });
   elements.scanReviewRows.querySelectorAll("[data-review-scan-index]").forEach((button) => {
     button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
   });
@@ -3422,6 +3519,26 @@ function renderScanReview() {
         : manualBatchWaiting
           ? `Added ${files.length} ticket page${files.length === 1 ? "" : "s"}. Add every page first, then tap Parse pages.`
           : "Photos are compressed and ready to parse.";
+}
+
+function openScanPhotosPdf(photoList) {
+  const photoHtml = photoList.map((photo, index) => {
+    const label = (photo.type === "sales-summary" ? "Sales Summary" : "Manual Instant") + " — Saved " + new Date(photo.savedAt).toLocaleString();
+    return '<div class="scan-page"><p class="scan-label">' + (index + 1) + '. ' + label + '</p><img src="' + photo.url + '" alt="Scan ' + (index + 1) + '" /></div>';
+  }).join("");
+  const dateLabel = typeof state !== "undefined" ? (state.businessDate || "") : "";
+  const countLabel = photoList.length + " photo" + (photoList.length === 1 ? "" : "s");
+  const html = '<!DOCTYPE html><html><head><meta charset="utf-8" /><title>Lottery Scans — ' + dateLabel + '</title><style>* { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: sans-serif; background: #fff; } @media print { .no-print { display: none; } .scan-page { page-break-inside: avoid; } } .no-print { background: #1a1a1a; color: #fff; padding: 10px 16px; font-size: 13px; display: flex; align-items: center; gap: 12px; } .no-print button { background: #fff; color: #1a1a1a; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; } h1 { font-size: 14px; padding: 10px 16px 4px; color: #444; } .scan-page { padding: 8px 16px 16px; border-bottom: 1px solid #e0e0e0; } .scan-label { font-size: 11px; color: #666; margin-bottom: 6px; } .scan-page img { max-width: 100%; height: auto; display: block; border: 1px solid #ccc; border-radius: 4px; }</style></head><body><div class="no-print"><span>Lottery Scans — ' + dateLabel + ' (' + countLabel + ')</span><button onclick="window.print()">Print / Save as PDF</button></div><h1>Lottery Scans — ' + dateLabel + '</h1>' + photoHtml + '</body></html>';
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, "_blank");
+  if (!win) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "lottery-scans-" + dateLabel + ".html";
+    a.click();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 async function parseSalesSummaryScan() {
@@ -4325,7 +4442,6 @@ function handleEntryKeydown(event, row, fieldName) {
   const rows = Array.from(elements.gameRows.querySelectorAll("tr"));
   const currentIndex = rows.indexOf(row);
 
-  // For manualInstantSold: skip disabled rows and find next enabled cell
   if (fieldName === "manualInstantSold") {
     for (let i = currentIndex + 1; i < rows.length; i++) {
       const candidate = rows[i].querySelector("[data-field='manualInstantSold']");
@@ -4341,7 +4457,6 @@ function handleEntryKeydown(event, row, fieldName) {
 
   const nextRow = rows[currentIndex + 1];
   const nextInput = nextRow?.querySelector(`[data-field='${fieldName}']`);
-
   if (nextInput) {
     nextInput.focus({ preventScroll: true });
     nextInput.select();
@@ -5810,6 +5925,17 @@ elements.editInventoryButton.addEventListener("click", () => {
   inventoryEditMode = !inventoryEditMode;
   elements.editInventoryButton.textContent = inventoryEditMode ? "Lock inventory" : "Edit inventory";
   elements.editInventoryButton.classList.toggle("active-edit", inventoryEditMode);
+  if (!inventoryEditMode) {
+    // Flush any still-focused inventory field so its blur handler fires and saves
+    if (document.activeElement?.dataset?.inventoryField) {
+      document.activeElement.blur();
+    }
+    // Stamp fresh timestamp and force immediate cloud push
+    const _lts = new Date().toISOString();
+    inventory.forEach((g) => { g._inventoryUpdatedAt = _lts; });
+    persistState();
+    saveCloudState();
+  }
   renderGames();
 });
 elements.editDayButton?.addEventListener("click", toggleEditDayMode);
