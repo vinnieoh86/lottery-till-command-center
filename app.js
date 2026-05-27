@@ -362,8 +362,39 @@ function todayIso() {
   return `${year}-${month}-${day}`;
 }
 
+function isClosedHoliday(date) {
+  const d = new Date(`${date}T12:00:00`);
+  const month = d.getMonth() + 1; // 1-12
+  const day = d.getDate();
+  const dow = d.getDay(); // 0=Sun
+
+  // New Year's Day – January 1
+  if (month === 1 && day === 1) return true;
+
+  // Memorial Day – last Monday of May
+  if (month === 5 && dow === 1) {
+    const nextMonday = new Date(d);
+    nextMonday.setDate(day + 7);
+    if (nextMonday.getMonth() + 1 !== 5) return true;
+  }
+
+  // Independence Day – July 4
+  if (month === 7 && day === 4) return true;
+
+  // Labor Day – first Monday of September
+  if (month === 9 && dow === 1 && day <= 7) return true;
+
+  // Thanksgiving – fourth Thursday of November
+  if (month === 11 && dow === 4 && Math.ceil(day / 7) === 4) return true;
+
+  // Christmas Day – December 25
+  if (month === 12 && day === 25) return true;
+
+  return false;
+}
+
 function isClosedDate(date) {
-  return new Date(`${date}T12:00:00`).getDay() === 0;
+  return new Date(`${date}T12:00:00`).getDay() === 0 || isClosedHoliday(date);
 }
 
 function selectedMonthDates() {
@@ -1710,7 +1741,7 @@ function previousOpenDate(date) {
   const previousDate = new Date(`${date}T12:00:00`);
   do {
     previousDate.setDate(previousDate.getDate() - 1);
-  } while (previousDate.getDay() === 0);
+  } while (isClosedDate(previousDate.toISOString().slice(0, 10)));
 
   return previousDate.toISOString().slice(0, 10);
 }
