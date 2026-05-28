@@ -362,39 +362,8 @@ function todayIso() {
   return `${year}-${month}-${day}`;
 }
 
-function isClosedHoliday(date) {
-  const d = new Date(`${date}T12:00:00`);
-  const month = d.getMonth() + 1; // 1-12
-  const day = d.getDate();
-  const dow = d.getDay(); // 0=Sun
-
-  // New Year's Day – January 1
-  if (month === 1 && day === 1) return true;
-
-  // Memorial Day – last Monday of May
-  if (month === 5 && dow === 1) {
-    const nextMonday = new Date(d);
-    nextMonday.setDate(day + 7);
-    if (nextMonday.getMonth() + 1 !== 5) return true;
-  }
-
-  // Independence Day – July 4
-  if (month === 7 && day === 4) return true;
-
-  // Labor Day – first Monday of September
-  if (month === 9 && dow === 1 && day <= 7) return true;
-
-  // Thanksgiving – fourth Thursday of November
-  if (month === 11 && dow === 4 && Math.ceil(day / 7) === 4) return true;
-
-  // Christmas Day – December 25
-  if (month === 12 && day === 25) return true;
-
-  return false;
-}
-
 function isClosedDate(date) {
-  return new Date(`${date}T12:00:00`).getDay() === 0 || isClosedHoliday(date);
+  return new Date(`${date}T12:00:00`).getDay() === 0;
 }
 
 function selectedMonthDates() {
@@ -1344,12 +1313,28 @@ async function loadCloudState(options = {}) {
         ...(cloudState.pinSettings?.users || []),
       ]),
     };
+    // Merge savedOrders: union of local + cloud by id, keep newest savedAt per id, cap at 24
+    const localOrders = state.savedOrders || [];
+    const cloudOrders = cloudState.savedOrders || [];
+    const orderMap = new Map();
+    [...cloudOrders, ...localOrders].forEach((order) => {
+      if (!order?.id) return;
+      const existing = orderMap.get(order.id);
+      if (!existing || (order.savedAt || "") > (existing.savedAt || "")) {
+        orderMap.set(order.id, order);
+      }
+    });
+    const mergedSavedOrders = Array.from(orderMap.values())
+      .sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""))
+      .slice(0, 24);
+    if (mergedSavedOrders.length > (cloudOrders.length || 0)) _mergeHadLocalNewer = true;
     state = normalizeStoredState({
       ...cloudState,
       dailyLogs: mergedDailyLogs,
       till: mergedTill,
       businessDate: activeDate,
       pinSettings: mergedPinSettings,
+      savedOrders: mergedSavedOrders,
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     // Never replace inventory from cloud while the user is actively editing it.
@@ -1741,7 +1726,7 @@ function previousOpenDate(date) {
   const previousDate = new Date(`${date}T12:00:00`);
   do {
     previousDate.setDate(previousDate.getDate() - 1);
-  } while (isClosedDate(previousDate.toISOString().slice(0, 10)));
+  } while (previousDate.getDay() === 0);
 
   return previousDate.toISOString().slice(0, 10);
 }
@@ -3286,10 +3271,24 @@ function manualInstantMatchedRows(parsed = scanDraft.parsed) {
   const normalized = normalizeManualInstantParsed(parsed || {});
   return normalized.totalsByGame
     .map((item) => {
-      const game = inventory.find((candidate) => String(candidate.bookNumber || "").padStart(4, "0") === item.gameNumber);
+      const raw = String(item.gameNumber || "").trim();
+      const padded = raw.padStart(4, "0").slice(-4);
+      // Try matches in order of confidence:
+      // 1. Exact 4-digit padded match on bookNumber
+      let game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded);
+      // 2. Last 3 digits match (AI sometimes drops leading digit)
+      if (!game && padded.length >= 3) {
+        const last3 = padded.slice(-3);
+        game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0").slice(-3) === last3);
+      }
+      // 3. Numeric value match regardless of leading zeros (e.g. "762" matches "0762")
+      if (!game) {
+        const numericRaw = String(parseInt(raw, 10) || 0);
+        game = inventory.find((c) => String(parseInt(c.bookNumber || "0", 10)) === numericRaw);
+      }
       return {
         game,
-        gameNumber: item.gameNumber,
+        gameNumber: padded,
         amount: normalizeNumber(item.amount),
       };
     })
@@ -4715,6 +4714,9 @@ function renderSummary() {
   });
 }
 
+let managerGameSort = { key: "sales", dir: "desc" };
+let managerDaySort = { key: "date", dir: "desc" };
+
 function renderManagerReports() {
   if (!isAdminRole()) return;
 
@@ -4734,21 +4736,11 @@ function renderManagerReports() {
       acc.manualInstantSold += row.manualInstantSold;
       acc.ticketsSold += row.ticketsSold;
       acc.grossSales += row.grossSales;
-      acc.cashes += row.onlineCashes + row.instantCashes + row.officePayout;
+      acc.caches += row.onlineCashes + row.instantCashes + row.officePayout;
       acc.cashless += row.cashlessOnlineSales + row.cashlessInstantSales;
       return acc;
     },
-    {
-      lotterySales: 0,
-      cashDrawer: 0,
-      variance: 0,
-      instantSales: 0,
-      manualInstantSold: 0,
-      ticketsSold: 0,
-      grossSales: 0,
-      cashes: 0,
-      cashless: 0,
-    },
+    { lotterySales:0, cashDrawer:0, variance:0, instantSales:0, manualInstantSold:0, ticketsSold:0, grossSales:0, caches:0, cashless:0 },
   );
   const avgDailyLottery = dates.length ? totals.lotterySales / dates.length : 0;
   const mismatch = totals.manualInstantSold - totals.instantSales;
@@ -4765,14 +4757,14 @@ function renderManagerReports() {
     ["Tickets sold", totals.ticketsSold],
     ["Avg lottery/day", currency.format(avgDailyLottery)],
     ["Gross sales", currency.format(totals.grossSales)],
-    ["Total cashes/payout", currency.format(totals.cashes)],
+    ["Total cashes/payout", currency.format(totals.caches)],
     ["Cashless sales", currency.format(totals.cashless)],
   ];
-
   elements.managerReportCards.innerHTML = cards
     .map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
 
+  // ── Game table ──────────────────────────────────────────────────────────────
   const gameRows = inventory
     .filter((game) => game.value !== "")
     .map((game) => {
@@ -4780,40 +4772,64 @@ function renderManagerReports() {
       const sales = tickets * normalizeNumber(game.value);
       return { game, tickets, sales };
     })
-    .filter((row) => row.tickets > 0)
-    .sort((a, b) => b.sales - a.sales || b.tickets - a.tickets)
-    .slice(0, 12);
+    .filter((row) => row.tickets > 0);
 
-  elements.managerGameReportRows.innerHTML =
-    gameRows
-      .map(
-        ({ game, tickets, sales }) => `
-          <tr>
-            <td>${game.box}</td>
-            <td>${game.bookNumber || "-"}</td>
-            <td>${game.name || "-"}</td>
-            <td>${formatGameValue(game)}</td>
-            <td>${tickets}</td>
-            <td>${currency.format(sales)}</td>
-          </tr>
-        `,
-      )
-      .join("") || `<tr><td colspan="6">No saved game sales in this range.</td></tr>`;
+  const gameSortFn = (a, b) => {
+    const dir = managerGameSort.dir === "asc" ? 1 : -1;
+    switch (managerGameSort.key) {
+      case "box": return dir * String(a.game.box).localeCompare(String(b.game.box), undefined, { numeric: true });
+      case "bookNumber": return dir * String(a.game.bookNumber || "").localeCompare(String(b.game.bookNumber || ""), undefined, { numeric: true });
+      case "name": return dir * String(a.game.name || "").localeCompare(String(b.game.name || ""));
+      case "value": return dir * (normalizeNumber(a.game.value) - normalizeNumber(b.game.value));
+      case "tickets": return dir * (a.tickets - b.tickets);
+      case "sales": return dir * (a.sales - b.sales);
+      default: return dir * (b.sales - a.sales);
+    }
+  };
+  const sortedGameRows = [...gameRows].sort(gameSortFn).slice(0, 20);
+  const gameArrow = (key) => managerGameSort.key === key ? (managerGameSort.dir === "asc" ? " ▲" : " ▼") : "";
+  const gameHeaders = [["box","Box"],["bookNumber","Game #"],["name","Game"],["value","$"],["tickets","Tickets"],["sales","Sales"]]
+    .map(([key, label]) => `<th><button type="button" class="sort-header" data-mgr-game-sort="${key}">${label}${gameArrow(key)}</button></th>`)
+    .join("");
+  elements.managerGameReportRows.closest("table").querySelector("thead tr").innerHTML = gameHeaders;
+  elements.managerGameReportRows.innerHTML = sortedGameRows
+    .map(({ game, tickets, sales }) => `<tr><td>${game.box}</td><td>${game.bookNumber||"-"}</td><td>${game.name||"-"}</td><td>${formatGameValue(game)}</td><td>${tickets}</td><td>${currency.format(sales)}</td></tr>`)
+    .join("") || `<tr><td colspan="6">No saved game sales in this range.</td></tr>`;
+  elements.managerGameReportRows.closest("table").querySelectorAll("[data-mgr-game-sort]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.mgrGameSort;
+      managerGameSort = { key, dir: managerGameSort.key === key && managerGameSort.dir === "desc" ? "asc" : "desc" };
+      renderManagerReports();
+    });
+  });
 
-  const sortedDayRows = [...dayRows].sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
-  elements.managerDayReportRows.innerHTML =
-    sortedDayRows
-      .map(
-        (row) => `
-          <tr>
-            <td>${row.date}${row.date === biggestVariance.date ? " *" : ""}</td>
-            <td>${currency.format(row.lotterySales)}</td>
-            <td>${currency.format(row.cashDrawer)}</td>
-            <td class="${row.variance < 0 ? "negative-text" : "positive-text"}">${row.variance >= 0 ? "+" : ""}${currency.format(row.variance)}</td>
-          </tr>
-        `,
-      )
-      .join("") || `<tr><td colspan="4">No saved daily closes in this range.</td></tr>`;
+  // ── Day variance table ──────────────────────────────────────────────────────
+  const daySortFn = (a, b) => {
+    const dir = managerDaySort.dir === "asc" ? 1 : -1;
+    switch (managerDaySort.key) {
+      case "date": return dir * String(a.date).localeCompare(String(b.date));
+      case "lottery": return dir * (a.lotterySales - b.lotterySales);
+      case "drawer": return dir * (a.cashDrawer - b.cashDrawer);
+      case "variance": return dir * (a.variance - b.variance);
+      default: return dir * String(a.date).localeCompare(String(b.date));
+    }
+  };
+  const sortedDayRows = [...dayRows].sort(daySortFn);
+  const dayArrow = (key) => managerDaySort.key === key ? (managerDaySort.dir === "asc" ? " ▲" : " ▼") : "";
+  const dayHeaders = [["date","Date"],["lottery","Lottery"],["drawer","Drawer"],["variance","+/-"]]
+    .map(([key, label]) => `<th><button type="button" class="sort-header" data-mgr-day-sort="${key}">${label}${dayArrow(key)}</button></th>`)
+    .join("");
+  elements.managerDayReportRows.closest("table").querySelector("thead tr").innerHTML = dayHeaders;
+  elements.managerDayReportRows.innerHTML = sortedDayRows
+    .map((row) => `<tr><td>${row.date}${row.date === biggestVariance.date ? " *" : ""}</td><td>${currency.format(row.lotterySales)}</td><td>${currency.format(row.cashDrawer)}</td><td class="${row.variance < 0 ? "negative-text" : "positive-text"}">${row.variance >= 0 ? "+" : ""}${currency.format(row.variance)}</td></tr>`)
+    .join("") || `<tr><td colspan="4">No saved daily closes in this range.</td></tr>`;
+  elements.managerDayReportRows.closest("table").querySelectorAll("[data-mgr-day-sort]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.mgrDaySort;
+      managerDaySort = { key, dir: managerDaySort.key === key && managerDaySort.dir === "desc" ? "asc" : "desc" };
+      renderManagerReports();
+    });
+  });
 }
 
 function compareSummaryRows(a, b, key) {
