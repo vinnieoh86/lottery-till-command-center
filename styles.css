@@ -3352,3 +3352,135 @@ pre {
   padding-top: 0.5rem;
   border-top: 1px solid var(--line);
 }
+
+
+.cash-count-panel {
+  margin-top: 0.9rem;
+}
+
+.cash-count-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.cash-count-entry-card,
+.cash-count-record-card,
+.cash-count-pos-card {
+  border: 1px solid rgba(31, 122, 79, 0.18);
+  border-radius: 1rem;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.cash-count-primary-card {
+  margin-top: 0;
+}
+
+.cash-count-record-card-wide {
+  grid-column: 1 / -1;
+}
+
+.cash-count-bold-label,
+.cash-adjustment-grid label {
+  font-weight: 900;
+}
+
+.cash-count-bold-label input,
+.cash-adjustment-grid input {
+  font-weight: 500;
+}
+
+.cash-count-section-heading h3 {
+  margin: 0 0 0.75rem;
+}
+
+.cash-count-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 0.95rem;
+}
+
+.store-cash-row {
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+}
+
+.cash-count-total-card {
+  margin-top: 0.9rem;
+  border-radius: 1rem;
+  padding: 0.85rem;
+  background: var(--coal);
+  color: #f7f1df;
+}
+
+.cash-count-total-card.light {
+  background: rgba(201, 242, 74, 0.16);
+  color: var(--text);
+  border: 1px solid rgba(31, 122, 79, 0.18);
+}
+
+.cash-count-total-card.variance {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.cash-count-total-card span {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cash-count-total-card strong {
+  font-size: 1.55rem;
+  font-family: var(--numeric-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.cash-count-pos-card {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.cash-adjustment-grid,
+.cash-count-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+
+.cash-count-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.cash-count-record-table .positive,
+#storeCashVarianceTotal.positive {
+  color: #0a7a3d;
+}
+
+.cash-count-record-table .negative,
+#storeCashVarianceTotal.negative {
+  color: #b32929;
+}
+
+.cash-count-record-table .balanced,
+#storeCashVarianceTotal.balanced {
+  color: #0f5fa8;
+}
+
+@media (max-width: 900px) {
+  .cash-count-layout,
+  .cash-count-grid,
+  .cash-adjustment-grid,
+  .cash-count-filters {
+    grid-template-columns: 1fr;
+  }
+}

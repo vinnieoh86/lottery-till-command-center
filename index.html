@@ -31,6 +31,7 @@
           <button class="nav-link" type="button" data-view-button="order">Order Sheet</button>
           <button class="nav-link admin-only" type="button" data-view-button="reports">Reports</button>
           <button class="nav-link admin-only" type="button" data-view-button="settings">Settings</button>
+          <button class="nav-link admin-only" type="button" data-view-button="cashcount">Cash Count</button>
         </nav>
         <section class="mobile-sync-strip">
           <span id="mobileSyncStatus">Local draft</span>
@@ -600,10 +601,90 @@
             </div>
             <div id="userList" class="user-list"></div>
           </div>
+
           <p class="formula-note">
             Admin has full access. User mode can enter daily ending numbers, cash drawer counts, and order sheet quantities only.
           </p>
         </section>
+        <section id="cash-count" class="panel report-panel app-view admin-only" data-view="cashcount">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Admin</p>
+              <h2>Cash Count</h2>
+            </div>
+            <span>Store cash count only. This is separate from lottery and does not change lottery drawer totals.</span>
+          </div>
+          <div class="cash-count-panel">
+            <div class="cash-count-layout">
+              <section class="cash-count-pos-card cash-count-primary-card">
+                <div class="cash-count-section-heading">
+                  <p class="eyebrow">POS cash sales</p>
+                  <h3>GoldenKey cash sales</h3>
+                </div>
+                <label class="cash-count-bold-label">
+                  GoldenKey Cash Sales
+                  <input id="goldenKeyCashSales" data-enter-group="store-cash-adjustments" data-enter-index="0" type="number" inputmode="decimal" step="0.01" placeholder="0.00" />
+                </label>
+                <div id="cashAdjustmentRows" class="cash-adjustment-grid"></div>
+                <div class="cash-count-total-card light">
+                  <span>Total Cash</span>
+                  <strong id="storeCashExpectedTotal">$0.00</strong>
+                </div>
+              </section>
+
+              <section class="cash-count-entry-card cash-count-primary-card">
+                <div class="cash-count-section-heading store-cash-drawer-heading">
+                  <p class="eyebrow">Cash count</p>
+                  <h3>Store cash drawer</h3>
+                </div>
+                <div id="storeCashRows" class="cash-count-grid"></div>
+                <div class="cash-count-total-card">
+                  <span>Cash counted</span>
+                  <strong id="storeCashCountedTotal">$0.00</strong>
+                </div>
+                <div class="cash-count-total-card variance">
+                  <span>+/- Match</span>
+                  <strong id="storeCashVarianceTotal" class="balanced">$0.00</strong>
+                </div>
+                <div class="settings-actions cash-count-actions">
+                  <button id="saveCashCountButton" type="button">Save cash count</button>
+                  <button id="clearCashCountButton" class="ghost-button" type="button">Clear</button>
+                </div>
+              </section>
+
+              <section class="cash-count-record-card cash-count-record-card-wide">
+                <div class="cash-count-section-heading">
+                  <p class="eyebrow">Records</p>
+                  <h3>Daily +/- cash matches</h3>
+                </div>
+                <div class="cash-count-filters">
+                  <label>
+                    Month
+                    <select id="cashCountMonthFilter"></select>
+                  </label>
+                  <label>
+                    Year
+                    <select id="cashCountYearFilter"></select>
+                  </label>
+                </div>
+                <div class="table-wrap compact-table-wrap">
+                  <table class="manager-report-table cash-count-record-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Counted</th>
+                        <th>POS Total</th>
+                        <th>+/-</th>
+                      </tr>
+                    </thead>
+                    <tbody id="cashCountRecordRows"></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
       </main>
     </div>
 

@@ -296,6 +296,19 @@ const elements = {
   newUserPinInput: document.querySelector("#newUserPinInput"),
   addUserButton: document.querySelector("#addUserButton"),
   userList: document.querySelector("#userList"),
+  cashCountToggleButton: document.querySelector("#cashCountToggleButton"),
+  cashCountPanel: document.querySelector("#cashCountPanel"),
+  storeCashRows: document.querySelector("#storeCashRows"),
+  storeCashCountedTotal: document.querySelector("#storeCashCountedTotal"),
+  goldenKeyCashSales: document.querySelector("#goldenKeyCashSales"),
+  cashAdjustmentRows: document.querySelector("#cashAdjustmentRows"),
+  storeCashExpectedTotal: document.querySelector("#storeCashExpectedTotal"),
+  storeCashVarianceTotal: document.querySelector("#storeCashVarianceTotal"),
+  saveCashCountButton: document.querySelector("#saveCashCountButton"),
+  clearCashCountButton: document.querySelector("#clearCashCountButton"),
+  cashCountMonthFilter: document.querySelector("#cashCountMonthFilter"),
+  cashCountYearFilter: document.querySelector("#cashCountYearFilter"),
+  cashCountRecordRows: document.querySelector("#cashCountRecordRows"),
   appConfirmModal: document.querySelector("#appConfirmModal"),
   appConfirmEyebrow: document.querySelector("#appConfirmEyebrow"),
   appConfirmTitle: document.querySelector("#appConfirmTitle"),
@@ -378,6 +391,42 @@ function selectedMonthDates() {
   });
 }
 
+
+function createEmptyStoreCashCount(date = todayIso()) {
+  return {
+    date,
+    counts: Object.fromEntries(cashDenominations.map((item) => [item.label, 0])),
+    goldenKeyCashSales: 0,
+    adjustments: Array.from({ length: 6 }, () => 0),
+  };
+}
+
+function normalizeStoreCashCount(value = {}) {
+  const defaults = createEmptyStoreCashCount();
+  return {
+    date: value?.date || defaults.date,
+    counts: { ...defaults.counts, ...(value?.counts || {}) },
+    goldenKeyCashSales: normalizeNumber(value?.goldenKeyCashSales),
+    adjustments: Array.from({ length: 6 }, (_, index) => normalizeNumber(value?.adjustments?.[index])),
+  };
+}
+
+function calculateStoreCashCountedTotal(count = state.storeCashCount) {
+  const normalized = normalizeStoreCashCount(count);
+  return cashDenominations.reduce((sum, item) => sum + normalizeNumber(normalized.counts[item.label]) * item.value, 0);
+}
+
+function calculateStoreCashExpectedTotal(count = state.storeCashCount) {
+  const normalized = normalizeStoreCashCount(count);
+  return normalizeNumber(normalized.goldenKeyCashSales) + normalized.adjustments.reduce((sum, value) => sum + normalizeNumber(value), 0);
+}
+
+function getStoreCashTotals(count = state.storeCashCount) {
+  const counted = calculateStoreCashCountedTotal(count);
+  const expected = calculateStoreCashExpectedTotal(count);
+  return { counted, expected, variance: expected - counted };
+}
+
 function createDefaultState() {
   return {
     businessDate: todayIso(),
@@ -385,6 +434,8 @@ function createDefaultState() {
     dailyLogs: {},
     till: normalizeTill(),
     cashCounts: Object.fromEntries(cashDenominations.map((item) => [item.label, 0])),
+    storeCashCount: createEmptyStoreCashCount(),
+    storeCashRecords: {},
     orderInventory: emptyOrderInventory(),
     orderAudit: {},
     orderDc: Object.fromEntries([...dcBoxes].map((box) => [box, true])),
@@ -506,6 +557,8 @@ function normalizeStoredState(parsed = {}) {
       ...emptyCashCounts(),
       ...(parsed.cashCounts || {}),
     },
+    storeCashCount: normalizeStoreCashCount(parsed.storeCashCount),
+    storeCashRecords: parsed.storeCashRecords && typeof parsed.storeCashRecords === "object" ? parsed.storeCashRecords : {},
     orderInventory: { ...emptyOrderInventory(), ...(parsed.orderInventory || {}) },
     orderAudit: parsed.orderAudit || {},
     orderDc: { ...Object.fromEntries([...dcBoxes].map((box) => [box, true])), ...(parsed.orderDc || {}) },
@@ -610,6 +663,8 @@ function stateForBackupStorage() {
     dailyLogs: state.dailyLogs || {},
     till: state.till || defaultTill,
     cashCounts: state.cashCounts || emptyCashCounts(),
+    storeCashCount: normalizeStoreCashCount(state.storeCashCount),
+    storeCashRecords: state.storeCashRecords || {},
     inventory,
     orderInventory: state.orderInventory || {},
     extraOrders: state.extraOrders || [],
@@ -973,6 +1028,176 @@ function addUserPin() {
   persistState();
   renderUserList();
   elements.syncStatus.textContent = `${name} added`;
+}
+
+
+function formatCashCountDate(date) {
+  const parsed = new Date(`${date}T12:00:00`);
+  return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function ensureStoreCashState() {
+  state.storeCashCount = normalizeStoreCashCount(state.storeCashCount);
+  if (!state.storeCashRecords || typeof state.storeCashRecords !== "object") state.storeCashRecords = {};
+}
+
+function formatSignedCurrency(value) {
+  const amount = normalizeNumber(value);
+  if (amount === 0) return currency.format(0);
+  return `${amount > 0 ? "+" : "-"}${currency.format(Math.abs(amount))}`;
+}
+
+function updateStoreCashTotals() {
+  if (!elements.storeCashCountedTotal) return;
+  ensureStoreCashState();
+  const totals = getStoreCashTotals();
+  elements.storeCashCountedTotal.textContent = currency.format(totals.counted);
+  elements.storeCashExpectedTotal.textContent = currency.format(totals.expected);
+  elements.storeCashVarianceTotal.textContent = formatSignedCurrency(totals.variance);
+  elements.storeCashVarianceTotal.classList.toggle("positive", totals.variance > 0);
+  elements.storeCashVarianceTotal.classList.toggle("negative", totals.variance < 0);
+  elements.storeCashVarianceTotal.classList.toggle("balanced", totals.variance === 0);
+}
+
+function renderStoreCashCountFilters(records) {
+  if (!elements.cashCountMonthFilter || !elements.cashCountYearFilter) return;
+  const currentMonth = elements.cashCountMonthFilter.value || "all";
+  const currentYear = elements.cashCountYearFilter.value || "all";
+  const dates = Object.keys(records || {}).sort().reverse();
+  const months = Array.from(new Set(dates.map((date) => date.slice(0, 7))));
+  const years = Array.from(new Set(dates.map((date) => date.slice(0, 4))));
+
+  elements.cashCountMonthFilter.innerHTML = `<option value="all">All months</option>${months
+    .map((month) => {
+      const label = new Date(`${month}-01T12:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      return `<option value="${month}">${label}</option>`;
+    })
+    .join("")}`;
+  elements.cashCountYearFilter.innerHTML = `<option value="all">All years</option>${years
+    .map((year) => `<option value="${year}">${year}</option>`)
+    .join("")}`;
+
+  elements.cashCountMonthFilter.value = months.includes(currentMonth) ? currentMonth : "all";
+  elements.cashCountYearFilter.value = years.includes(currentYear) ? currentYear : "all";
+}
+
+function renderStoreCashRecords() {
+  if (!elements.cashCountRecordRows) return;
+  ensureStoreCashState();
+  const records = state.storeCashRecords || {};
+  renderStoreCashCountFilters(records);
+  const month = elements.cashCountMonthFilter?.value || "all";
+  const year = elements.cashCountYearFilter?.value || "all";
+  const rows = Object.entries(records)
+    .filter(([date]) => (month === "all" || date.startsWith(month)) && (year === "all" || date.startsWith(year)))
+    .sort(([a], [b]) => b.localeCompare(a));
+
+  elements.cashCountRecordRows.innerHTML = rows.length
+    ? rows
+        .map(([date, record]) => {
+          const variance = normalizeNumber(record.variance);
+          const varianceClass = variance > 0 ? "positive" : variance < 0 ? "negative" : "balanced";
+          return `<tr>
+            <td>${formatCashCountDate(date)}</td>
+            <td>${currency.format(normalizeNumber(record.counted))}</td>
+            <td>${currency.format(normalizeNumber(record.expected))}</td>
+            <td class="${varianceClass}">${formatSignedCurrency(variance)}</td>
+          </tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="4">No cash count records yet.</td></tr>`;
+}
+
+function renderStoreCashCount(options = {}) {
+  if (!elements.storeCashRows) return;
+  const force = Boolean(options.force);
+  const activeNode = document.activeElement;
+  const editingCashCount = !force && activeNode && activeNode.closest && activeNode.closest("#cash-count");
+  ensureStoreCashState();
+  if (state.storeCashCount.date && state.storeCashCount.date !== state.businessDate) {
+    state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  } else {
+    state.storeCashCount.date = state.businessDate;
+  }
+
+  // Do not rebuild Cash Count inputs while the user is actively typing.
+  // Rebuilding replaces the input node and can make typed values disappear.
+  if (editingCashCount) {
+    updateStoreCashTotals();
+    renderStoreCashRecords();
+    return;
+  }
+
+  elements.storeCashRows.innerHTML = "";
+  cashDenominations.forEach((item, index) => {
+    const row = document.createElement("label");
+    row.className = "cash-row store-cash-row";
+    row.innerHTML = `<span>${item.label}</span><input data-store-cash-denom="${item.label}" data-enter-group="store-cash-counts" data-enter-index="${index}" type="number" min="0" step="1" inputmode="numeric" pattern="[0-9]*" value="${state.storeCashCount.counts[item.label] ?? 0}" />`;
+    const input = row.querySelector("input");
+    input.addEventListener("input", (event) => {
+      ensureStoreCashState();
+      state.storeCashCount.date = state.businessDate;
+      state.storeCashCount.counts[item.label] = normalizeNumber(event.target.value);
+      updateStoreCashTotals();
+    });
+    input.addEventListener("keydown", handleGroupedEnterKeydown);
+    elements.storeCashRows.appendChild(row);
+  });
+
+  if (elements.goldenKeyCashSales) {
+    elements.goldenKeyCashSales.value = state.storeCashCount.goldenKeyCashSales || "";
+  }
+
+  if (elements.cashAdjustmentRows) {
+    elements.cashAdjustmentRows.innerHTML = Array.from({ length: 6 }, (_, index) => `
+      <label class="cash-count-bold-label">
+        +/-
+        <input data-cash-adjustment-index="${index}" data-enter-group="store-cash-adjustments" data-enter-index="${index + 1}" type="number" inputmode="decimal" step="0.01" placeholder="0.00" value="${state.storeCashCount.adjustments[index] || ""}" />
+      </label>
+    `).join("");
+    elements.cashAdjustmentRows.querySelectorAll("[data-cash-adjustment-index]").forEach((input) => {
+      input.addEventListener("input", (event) => {
+        ensureStoreCashState();
+        const index = Number(event.target.dataset.cashAdjustmentIndex);
+        state.storeCashCount.date = state.businessDate;
+        state.storeCashCount.adjustments[index] = normalizeNumber(event.target.value);
+        updateStoreCashTotals();
+      });
+      input.addEventListener("keydown", handleGroupedEnterKeydown);
+    });
+  }
+
+  updateStoreCashTotals();
+  renderStoreCashRecords();
+}
+
+function saveStoreCashCount() {
+  ensureStoreCashState();
+  const totals = getStoreCashTotals();
+  const date = state.businessDate || todayIso();
+  state.storeCashRecords[date] = {
+    date,
+    counts: { ...state.storeCashCount.counts },
+    goldenKeyCashSales: normalizeNumber(state.storeCashCount.goldenKeyCashSales),
+    adjustments: [...state.storeCashCount.adjustments],
+    counted: totals.counted,
+    expected: totals.expected,
+    variance: totals.variance,
+    savedAt: new Date().toISOString(),
+    savedBy: currentUserName(),
+  };
+  state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  persistState();
+  renderStoreCashCount({ force: true });
+  renderStoreCashRecords();
+  elements.syncStatus.textContent = `Cash count saved: ${formatSignedCurrency(totals.variance)} +/-`;
+}
+
+function clearStoreCashCount() {
+  state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  persistState();
+  renderStoreCashCount({ force: true });
+  elements.syncStatus.textContent = "Cash count cleared";
 }
 
 function getTodayEndingInputs() {
@@ -4557,6 +4782,16 @@ function handleGroupedEnterKeydown(event) {
     return;
   }
 
+  if (group === "store-cash-counts") {
+    focusFirstInputInGroup("store-cash-adjustments");
+    return;
+  }
+
+  if (group === "store-cash-adjustments") {
+    elements.saveCashCountButton?.focus();
+    return;
+  }
+
   if (group === "order-qty" || group === "extra-orders") {
     event.currentTarget.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -4979,6 +5214,10 @@ function setActiveView(view, shouldScroll = false) {
     section.classList.toggle("view-hidden", !views.includes(view));
   });
 
+  if (view === "cashcount") {
+    renderStoreCashCount();
+  }
+
   // Scroll to the active section only when explicitly requested (nav button tap)
   if (shouldScroll) {
     const targetMap = {
@@ -4988,6 +5227,8 @@ function setActiveView(view, shouldScroll = false) {
       month: document.querySelector("#month-analysis"),
       order: document.querySelector("#order-sheet"),
       reports: document.querySelector("#manager-reports"),
+      settings: document.querySelector("#settings"),
+      cashcount: document.querySelector("#cash-count"),
     };
     const target = targetMap[view];
     if (target) {
@@ -5986,6 +6227,7 @@ function render() {
   renderTillInputs();
   renderTotals();
   renderScanReview();
+  renderStoreCashCount();
   renderOrderSheet();
   renderManagerReports();
 }
@@ -6145,6 +6387,18 @@ elements.pinPadButtons.forEach((button) => {
 elements.pinLockButton.addEventListener("click", () => lockApp());
 elements.saveAdminPinButton.addEventListener("click", saveAdminPin);
 elements.addUserButton.addEventListener("click", addUserPin);
+elements.cashCountToggleButton?.addEventListener("click", () => setActiveView("cashcount", true));
+elements.goldenKeyCashSales?.addEventListener("keydown", handleGroupedEnterKeydown);
+elements.goldenKeyCashSales?.addEventListener("input", (event) => {
+  ensureStoreCashState();
+  state.storeCashCount.date = state.businessDate;
+  state.storeCashCount.goldenKeyCashSales = normalizeNumber(event.target.value);
+  updateStoreCashTotals();
+});
+elements.saveCashCountButton?.addEventListener("click", saveStoreCashCount);
+elements.clearCashCountButton?.addEventListener("click", clearStoreCashCount);
+elements.cashCountMonthFilter?.addEventListener("change", renderStoreCashRecords);
+elements.cashCountYearFilter?.addEventListener("change", renderStoreCashRecords);
 elements.mobileDockToggleButton.addEventListener("click", toggleMobileEntryDock);
 elements.mobilePrevBoxButton.addEventListener("click", () => focusAdjacentMobileGame(-1));
 elements.mobileNextBoxButton.addEventListener("click", () => focusAdjacentMobileGame(1));
