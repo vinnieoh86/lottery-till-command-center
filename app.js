@@ -2035,13 +2035,17 @@ function hydrateActiveDay() {
   state.cashCounts = { ...emptyCashCounts(), ...dayLog.cashCounts };
 }
 
-function syncActiveDayDraft() {
+function syncActiveDayDraft(options = {}) {
+  const { cashChanged = false } = options;
   const dayLog = getDayLog();
   state.till = normalizeTill(state.till);
   dayLog.till = { ...state.till };
-  const hasAnyCashValue = Object.values(state.cashCounts || {}).some((v) => normalizeNumber(v) !== 0);
-  if (hasAnyCashValue || !dayLog.cashCountsUpdatedAt) {
-    dayLog.cashCounts = { ...state.cashCounts };
+
+  // Cash drawer values must be saved even when a denomination is cleared back to 0.
+  // The old guard skipped writes when all cash values were 0, which let the last
+  // synced non-zero value (often $50/$100 counts) come back from local/cloud state.
+  if (cashChanged || !dayLog.cashCountsUpdatedAt) {
+    dayLog.cashCounts = { ...emptyCashCounts(), ...(state.cashCounts || {}) };
     dayLog.cashCountsUpdatedAt = new Date().toISOString();
   }
 }
@@ -2283,7 +2287,7 @@ function stampEntryFieldUpdate(entry, key, nextValue, timestamp = new Date().toI
 
 function savePreviousDateDraftChange() {
   const dayLog = getDayLog();
-  syncActiveDayDraft();
+  syncActiveDayDraft({ cashChanged: true });
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   state.dailyLogs[state.businessDate] = cloneJson(dayLog);
@@ -2843,7 +2847,7 @@ function renderCashRows() {
         return;
       }
       state.cashCounts[item.label] = normalizeNumber(event.target.value);
-      syncActiveDayDraft();
+      syncActiveDayDraft({ cashChanged: true });
       persistIfLiveDate();
       renderTotals();
     });
@@ -2851,7 +2855,7 @@ function renderCashRows() {
       const previousValue = input.dataset.previousValue ?? "";
       const ok = await confirmPreviousDateFieldChange(input, previousValue, input.value, () => {
         state.cashCounts[item.label] = normalizeNumber(previousValue);
-        syncActiveDayDraft();
+        syncActiveDayDraft({ cashChanged: true });
         renderCashRows();
         renderTotals();
       });
@@ -3143,7 +3147,16 @@ function manualCellState(game, date = state.businessDate) {
 
 function currentParsedManualInstantFromReview() {
   const normalized = normalizeManualInstantParsed(scanDraft.parsed || {});
-  const reviewValues = scanDraft.manualReviewValues || {};
+  const reviewValues = { ...(scanDraft.manualReviewValues || {}) };
+
+  // Pull edits from the review panel too. Previously only live Manual Sold cells
+  // were trusted, so edits made inside the parsed review rows could disappear.
+  elements.scanReviewRows?.querySelectorAll("[data-manual-game]").forEach((input) => {
+    const game = findGameByParsedGameNumber(input.dataset.manualGame);
+    if (!game) return;
+    reviewValues[gameId(game)] = input.value === "" ? "" : formatDecimalInput(input.value);
+  });
+
   const totalsByGame = inventory
     .map((game) => {
       const value = Object.prototype.hasOwnProperty.call(reviewValues, gameId(game))
@@ -3293,6 +3306,14 @@ function manualInstantMatchedRows(parsed = scanDraft.parsed) {
       };
     })
     .sort((a, b) => String(a.gameNumber || "").localeCompare(String(b.gameNumber || ""), undefined, { numeric: true }));
+}
+
+function findGameByParsedGameNumber(rawGameNumber) {
+  const raw = String(rawGameNumber || "").trim();
+  const padded = raw.padStart(4, "0").slice(-4);
+  return inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded)
+    || inventory.find((c) => String(c.bookNumber || "").padStart(4, "0").slice(-3) === padded.slice(-3))
+    || inventory.find((c) => String(parseInt(c.bookNumber || "0", 10)) === String(parseInt(raw || "0", 10)));
 }
 
 function parsedManualInstantTotal(parsed = scanDraft.parsed) {
@@ -3514,6 +3535,23 @@ function renderScanReview() {
   });
   elements.scanReviewRows.querySelectorAll("[data-review-scan-index]").forEach((button) => {
     button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
+  });
+  elements.scanReviewRows.querySelectorAll("[data-manual-game]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const game = findGameByParsedGameNumber(input.dataset.manualGame);
+      if (!game) return;
+      scanDraft.manualReviewValues = {
+        ...(scanDraft.manualReviewValues || buildManualReviewValues(scanDraft.parsed)),
+        [gameId(game)]: input.value === "" ? "" : formatDecimalInput(input.value),
+      };
+      renderGames();
+      renderTotals();
+      const total = parsedManualInstantTotal(currentParsedManualInstantFromReview());
+      const target = normalizeManualInstantParsed(scanDraft.parsed || {}).reportDate || state.businessDate;
+      const auto = calculateInstantSales(target);
+      const totalNode = elements.scanReviewRows.querySelector("[data-manual-review-total]");
+      if (totalNode) totalNode.textContent = `${currency.format(total)} vs auto ${currency.format(auto)} (${total - auto >= 0 ? "+" : ""}${currency.format(total - auto)})`;
+    });
   });
 
   const manualBatchWaiting = scanDraft.type === "manual-instant" && files.length && !scanDraft.parsed;
@@ -4537,7 +4575,7 @@ function saveDay() {
 
   const dayLog = getDayLog();
   endingEditModeDate = "";
-  syncActiveDayDraft();
+  syncActiveDayDraft({ cashChanged: true });
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   dayLog.completedAt = dayLog.savedAt;
@@ -4571,7 +4609,7 @@ async function autoCompleteEndingDayIfReady() {
   if (selectedDateIsClosed() || isEndingCompleted() || !allEndingCountsEntered()) return;
   const dayLog = getDayLog();
   endingEditModeDate = "";
-  syncActiveDayDraft();
+  syncActiveDayDraft({ cashChanged: true });
   dayLog.totals = buildTotals();
   dayLog.savedAt = new Date().toISOString();
   dayLog.endingCompletedAt = dayLog.savedAt;
@@ -5938,6 +5976,9 @@ function printReconcileSheet(date = state.businessDate) {
 
 function render() {
   elements.businessDate.value = state.businessDate;
+  setDailyEntryDateLabel(state.businessDate);
+  // Prime pending review before live rows/totals render so parsed values preload consistently.
+  primePendingScanDraftForAdmin();
   setDailyEntryDateLabel(state.businessDate);
   renderCalendar();
   renderGames();
