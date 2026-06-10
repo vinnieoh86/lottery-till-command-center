@@ -129,6 +129,7 @@
                 <input id="gameSearchInput" class="game-search-input" type="search" placeholder="Game # or nameâ€¦" autocomplete="off" hidden />
               </div>
               <span class="lock-note">Inventory fields locked for employee mode</span>
+              <button id="tutorialButton" class="ghost-button tutorial-button" type="button">Tutorial</button>
               <button id="reconcileButton" class="ghost-button" type="button">Reconcile</button>
               <button id="printReconcileButton" class="ghost-button" type="button">Print sheet</button>
               <button id="editInventoryButton" class="ghost-button" type="button">Edit inventory</button>
@@ -708,6 +709,57 @@
           <button type="button" data-pin-action="backspace">Back</button>
         </div>
         <p id="pinMessage" class="pin-message">Enter your assigned PIN.</p>
+      </div>
+    </section>
+
+
+
+    <section id="tutorialModal" class="app-modal tutorial-modal" aria-modal="true" role="dialog" aria-labelledby="tutorialTitle" hidden>
+      <div class="app-modal-card tutorial-modal-card">
+        <div class="tutorial-modal-header">
+          <div>
+            <p class="eyebrow">Step by step</p>
+            <h2 id="tutorialTitle">Lottery report tutorial</h2>
+          </div>
+          <button id="tutorialCloseButton" class="ghost-button tutorial-close-button" type="button" aria-label="Close tutorial">×</button>
+        </div>
+
+        <div class="tutorial-sections">
+          <article class="tutorial-card">
+            <h3>End of day summary report</h3>
+            <ol class="tutorial-steps">
+              <li>Utilities</li>
+              <li>
+                <span>Store Manager Sign in</span>
+                <div class="tutorial-credentials">
+                  <div><strong>User ID:</strong> (0)- 47855</div>
+                  <div><strong>PW:</strong> 2896</div>
+                </div>
+              </li>
+              <li>Financial Report</li>
+              <li>Summary</li>
+              <li>Today</li>
+              <li>Print</li>
+            </ol>
+          </article>
+
+          <article class="tutorial-card">
+            <h3>Lottery Ticket Summary</h3>
+            <ol class="tutorial-steps">
+              <li>Instant Games</li>
+              <li>
+                <span>Tickets Sold History</span>
+                <div class="tutorial-credentials">
+                  <div><strong>Start Date:</strong> 0</div>
+                  <div><strong>End Date:</strong> 0</div>
+                  <div><strong>Start Time:</strong> 0</div>
+                  <div><strong>End Time:</strong> 23</div>
+                </div>
+              </li>
+              <li>Print</li>
+            </ol>
+          </article>
+        </div>
       </div>
     </section>
 

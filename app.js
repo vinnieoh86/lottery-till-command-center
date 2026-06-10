@@ -226,6 +226,9 @@ const elements = {
   instantMismatchAlert: document.querySelector("#instantMismatchAlert"),
   instantMismatchText: document.querySelector("#instantMismatchText"),
   manualOverrideButton: document.querySelector("#manualOverrideButton"),
+  tutorialButton: document.querySelector("#tutorialButton"),
+  tutorialModal: document.querySelector("#tutorialModal"),
+  tutorialCloseButton: document.querySelector("#tutorialCloseButton"),
   reconcileButton: document.querySelector("#reconcileButton"),
   printReconcileButton: document.querySelector("#printReconcileButton"),
   reconcilePanel: document.querySelector("#reconcilePanel"),
@@ -6238,6 +6241,23 @@ elements.seedMonthButton.addEventListener("click", buildMonth);
 elements.previousMonthButton.addEventListener("click", () => shiftDay(-1));
 elements.nextMonthButton.addEventListener("click", () => shiftDay(1));
 elements.todayButton.addEventListener("click", () => switchDate(todayIso()));
+
+elements.tutorialButton?.addEventListener("click", () => {
+  elements.tutorialModal.hidden = false;
+});
+elements.tutorialCloseButton?.addEventListener("click", () => {
+  elements.tutorialModal.hidden = true;
+});
+elements.tutorialModal?.addEventListener("click", (event) => {
+  if (event.target === elements.tutorialModal) {
+    elements.tutorialModal.hidden = true;
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.tutorialModal && !elements.tutorialModal.hidden) {
+    elements.tutorialModal.hidden = true;
+  }
+});
 elements.reconcileButton.addEventListener("click", () => {
   reconcileVisible = !reconcileVisible;
   elements.reconcileButton.textContent = reconcileVisible ? "Normal view" : "Reconcile";

@@ -3484,3 +3484,106 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+
+
+.tutorial-button {
+  border-color: rgba(31, 122, 79, 0.34);
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.tutorial-modal-card {
+  width: min(100%, 42rem);
+  max-height: min(88vh, 44rem);
+  overflow: auto;
+  padding: 1.15rem;
+}
+
+.tutorial-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tutorial-modal-header h2 {
+  margin-bottom: 0;
+}
+
+.tutorial-close-button {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.tutorial-sections {
+  display: grid;
+  gap: 0.95rem;
+}
+
+.tutorial-card {
+  border: 1px solid rgba(23, 33, 27, 0.12);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgba(255, 253, 246, 0.72);
+}
+
+.tutorial-card h3 {
+  margin: 0 0 0.85rem;
+  color: var(--green);
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.tutorial-steps {
+  display: grid;
+  gap: 0.68rem;
+  margin: 0;
+  padding-left: 1.35rem;
+}
+
+.tutorial-steps li {
+  padding-left: 0.2rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.tutorial-steps li::marker {
+  color: var(--green);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 800;
+}
+
+.tutorial-credentials {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+  border-left: 3px solid rgba(31, 122, 79, 0.38);
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.88rem;
+  font-weight: 600;
+  background: rgba(201, 242, 74, 0.14);
+}
+
+@media (max-width: 640px) {
+  .tutorial-modal {
+    align-items: end;
+    padding: 0.6rem;
+  }
+
+  .tutorial-modal-card {
+    width: 100%;
+    max-height: 86vh;
+    border-radius: 1.25rem 1.25rem 0.9rem 0.9rem;
+  }
+
+  .tutorial-card {
+    padding: 0.85rem;
+  }
+}
