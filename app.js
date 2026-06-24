@@ -438,6 +438,7 @@ function createDefaultState() {
     till: normalizeTill(),
     cashCounts: Object.fromEntries(cashDenominations.map((item) => [item.label, 0])),
     storeCashCount: createEmptyStoreCashCount(),
+    storeCashDrafts: {},
     storeCashRecords: {},
     orderInventory: emptyOrderInventory(),
     orderAudit: {},
@@ -561,6 +562,7 @@ function normalizeStoredState(parsed = {}) {
       ...(parsed.cashCounts || {}),
     },
     storeCashCount: normalizeStoreCashCount(parsed.storeCashCount),
+    storeCashDrafts: parsed.storeCashDrafts && typeof parsed.storeCashDrafts === "object" ? parsed.storeCashDrafts : {},
     storeCashRecords: parsed.storeCashRecords && typeof parsed.storeCashRecords === "object" ? parsed.storeCashRecords : {},
     orderInventory: { ...emptyOrderInventory(), ...(parsed.orderInventory || {}) },
     orderAudit: parsed.orderAudit || {},
@@ -667,6 +669,7 @@ function stateForBackupStorage() {
     till: state.till || defaultTill,
     cashCounts: state.cashCounts || emptyCashCounts(),
     storeCashCount: normalizeStoreCashCount(state.storeCashCount),
+    storeCashDrafts: state.storeCashDrafts || {},
     storeCashRecords: state.storeCashRecords || {},
     inventory,
     orderInventory: state.orderInventory || {},
@@ -1040,8 +1043,23 @@ function formatCashCountDate(date) {
 }
 
 function ensureStoreCashState() {
+  if (!state.storeCashDrafts || typeof state.storeCashDrafts !== "object") state.storeCashDrafts = {};
   state.storeCashCount = normalizeStoreCashCount(state.storeCashCount);
   if (!state.storeCashRecords || typeof state.storeCashRecords !== "object") state.storeCashRecords = {};
+}
+
+function loadStoreCashDraftForDate(date = state.businessDate) {
+  ensureStoreCashState();
+  const savedDraft = state.storeCashDrafts?.[date];
+  state.storeCashCount = normalizeStoreCashCount(savedDraft || createEmptyStoreCashCount(date));
+  state.storeCashCount.date = date;
+  state.storeCashDrafts[date] = normalizeStoreCashCount(state.storeCashCount);
+}
+
+function saveStoreCashDraftForDate(date = state.businessDate) {
+  ensureStoreCashState();
+  state.storeCashCount.date = date;
+  state.storeCashDrafts[date] = normalizeStoreCashCount(state.storeCashCount);
 }
 
 function formatSignedCurrency(value) {
@@ -1117,10 +1135,11 @@ function renderStoreCashCount(options = {}) {
   const activeNode = document.activeElement;
   const editingCashCount = !force && activeNode && activeNode.closest && activeNode.closest("#cash-count");
   ensureStoreCashState();
-  if (state.storeCashCount.date && state.storeCashCount.date !== state.businessDate) {
-    state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  if (state.storeCashCount.date !== state.businessDate) {
+    loadStoreCashDraftForDate(state.businessDate);
   } else {
     state.storeCashCount.date = state.businessDate;
+    saveStoreCashDraftForDate(state.businessDate);
   }
 
   // Do not rebuild Cash Count inputs while the user is actively typing.
@@ -1141,6 +1160,8 @@ function renderStoreCashCount(options = {}) {
       ensureStoreCashState();
       state.storeCashCount.date = state.businessDate;
       state.storeCashCount.counts[item.label] = normalizeNumber(event.target.value);
+      saveStoreCashDraftForDate(state.businessDate);
+      persistState();
       updateStoreCashTotals();
     });
     input.addEventListener("keydown", handleGroupedEnterKeydown);
@@ -1164,6 +1185,8 @@ function renderStoreCashCount(options = {}) {
         const index = Number(event.target.dataset.cashAdjustmentIndex);
         state.storeCashCount.date = state.businessDate;
         state.storeCashCount.adjustments[index] = normalizeNumber(event.target.value);
+        saveStoreCashDraftForDate(state.businessDate);
+        persistState();
         updateStoreCashTotals();
       });
       input.addEventListener("keydown", handleGroupedEnterKeydown);
@@ -1178,6 +1201,7 @@ function saveStoreCashCount() {
   ensureStoreCashState();
   const totals = getStoreCashTotals();
   const date = state.businessDate || todayIso();
+  saveStoreCashDraftForDate(date);
   state.storeCashRecords[date] = {
     date,
     counts: { ...state.storeCashCount.counts },
@@ -1190,6 +1214,7 @@ function saveStoreCashCount() {
     savedBy: currentUserName(),
   };
   state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  delete state.storeCashDrafts[date];
   persistState();
   renderStoreCashCount({ force: true });
   renderStoreCashRecords();
@@ -1197,7 +1222,9 @@ function saveStoreCashCount() {
 }
 
 function clearStoreCashCount() {
+  ensureStoreCashState();
   state.storeCashCount = createEmptyStoreCashCount(state.businessDate);
+  delete state.storeCashDrafts[state.businessDate];
   persistState();
   renderStoreCashCount({ force: true });
   elements.syncStatus.textContent = "Cash count cleared";
@@ -2706,6 +2733,7 @@ function switchDate(isoDate) {
   if (!isPreviousDateDraftMode()) {
     syncActiveDayDraft();
   }
+  saveStoreCashDraftForDate(state.businessDate);
   if (previousDateDraft?.date !== isoDate) previousDateDraft = null;
   if (endingEditModeDate && endingEditModeDate !== isoDate) endingEditModeDate = "";
   state.businessDate = isoDate;
@@ -2717,6 +2745,7 @@ function switchDate(isoDate) {
   setDailyEntryDateLabel(isoDate);
   elements.gameRows.innerHTML = "";
   hydrateActiveDay();
+  loadStoreCashDraftForDate(isoDate);
   ensurePreviousDateDraft();
   persistState();
   render();
@@ -2805,6 +2834,7 @@ function renderGames() {
     row.draggable = inventoryEditMode;
     row.dataset.inventoryId = id;
     row.classList.toggle("inventory-editing-row", inventoryEditMode);
+    row.classList.toggle("book-change-row", Boolean(entry.bookChangedToday));
     row.querySelectorAll("[data-static]").forEach((field) => {
       const key = field.dataset.static;
       if (inventoryEditMode && ["bookNumber", "name", "value"].includes(key)) {
@@ -2812,13 +2842,13 @@ function renderGames() {
         const editIndex = rowIndex * 3 + ["bookNumber", "name", "value"].indexOf(key);
         if (key === "value") {
           field.innerHTML = `
-            <select class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-enter-group="inventory-edit" data-enter-index="${editIndex}">
+            <select class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-original-value="${value}" data-enter-group="inventory-edit" data-enter-index="${editIndex}">
               <option value=""></option>
               ${[1, 2, 5, 10, 20, 30, 50].map((option) => `<option value="${option}" ${Number(value) === option ? "selected" : ""}>$${option}</option>`).join("")}
             </select>
           `;
         } else {
-          field.innerHTML = `<input class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-enter-group="inventory-edit" data-enter-index="${editIndex}" type="text" value="${value}" />`;
+          field.innerHTML = `<input class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-original-value="${value}" data-enter-group="inventory-edit" data-enter-index="${editIndex}" type="text" value="${value}" />`;
         }
       } else if (key === "box" && inventoryEditMode) {
         field.innerHTML = `<span class="drag-handle" title="Drag to reorder">::</span><strong>${game.box}</strong>`;
@@ -2969,7 +2999,8 @@ function renderGames() {
         input.addEventListener("input", (event) => {
           const field = event.target.dataset.inventoryField;
           if (field === "value") {
-            updateInventoryField(id, field, event.target.value);
+            updateInventoryField(id, field, event.target.value, { [field]: event.target.dataset.originalValue ?? "" });
+            event.target.dataset.originalValue = event.target.value;
           } else {
             // Text fields: store raw value in memory only — no cloud save mid-keystroke
             const game = inventory.find((item) => gameId(item) === id);
@@ -2979,7 +3010,8 @@ function renderGames() {
         input.addEventListener("blur", () => {
           const field = input.dataset.inventoryField;
           if (field === "value") return; // already saved on input
-          updateInventoryField(id, field, input.value);
+          updateInventoryField(id, field, input.value, { [field]: input.dataset.originalValue ?? "" });
+          input.dataset.originalValue = input.value;
           if (field === "bookNumber") {
             const game = inventory.find((item) => gameId(item) === id);
             input.value = game?.bookNumber || "";
@@ -3023,9 +3055,48 @@ function renderGames() {
   }
 }
 
-function updateInventoryField(id, field, value) {
+function isInventoryBookChangeField(field) {
+  return ["bookNumber", "name", "value"].includes(field);
+}
+
+function markInventoryBookChangedForToday(game, previousSnapshot = {}) {
+  if (!game) return;
+  const id = gameId(game);
+  const entry = getEntry(game, state.businessDate);
+  entry.bookChangedToday = true;
+  entry.bookChangedAt = new Date().toISOString();
+  entry.bookChangedBy = currentUserName();
+  entry.bookChangePrevious = {
+    bookNumber: previousSnapshot.bookNumber ?? "",
+    name: previousSnapshot.name ?? "",
+    value: previousSnapshot.value ?? "",
+  };
+  entry.bookChangeCurrent = {
+    bookNumber: game.bookNumber ?? "",
+    name: game.name ?? "",
+    value: game.value ?? "",
+  };
+  const previousDate = previousOpenDate(state.businessDate);
+  const previousLog = getDayLog(previousDate);
+  previousLog.entries[id] = {
+    ...(previousLog.entries[id] || {}),
+    todayEnding: 0,
+    bookResetForNewGame: true,
+    bookResetAt: entry.bookChangedAt,
+    bookResetBy: entry.bookChangedBy,
+  };
+  state.orderDc[id] = false;
+}
+
+function updateInventoryField(id, field, value, previousOverride = null) {
   const game = inventory.find((item) => gameId(item) === id);
   if (!game) return;
+  const previousSnapshot = {
+    bookNumber: game.bookNumber ?? "",
+    name: game.name ?? "",
+    value: game.value ?? "",
+    ...(previousOverride || {}),
+  };
 
   if (field === "value") {
     game[field] = value === "" ? "" : normalizeNumber(value);
@@ -3034,6 +3105,14 @@ function updateInventoryField(id, field, value) {
     game[field] = digitsOnly ? digitsOnly.padStart(4, "0").slice(-4) : "";
   } else {
     game[field] = value;
+  }
+  const changedBookInfo = isInventoryBookChangeField(field) && (
+    String(previousSnapshot.bookNumber) !== String(game.bookNumber ?? "") ||
+    String(previousSnapshot.name) !== String(game.name ?? "") ||
+    String(previousSnapshot.value) !== String(game.value ?? "")
+  );
+  if (changedBookInfo) {
+    markInventoryBookChangedForToday(game, previousSnapshot);
   }
   const _ts = new Date().toISOString();
   inventory.forEach((g) => { g._inventoryUpdatedAt = _ts; });
@@ -4609,7 +4688,17 @@ function renderReconciliationRows() {
     })
     .join("");
 
-  elements.reconcileRows.querySelectorAll("[data-reconcile-box]").forEach((input) => {
+  const reconcileInputs = Array.from(elements.reconcileRows.querySelectorAll("[data-reconcile-box]"));
+  reconcileInputs.forEach((input, inputIndex) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const nextInput = reconcileInputs[inputIndex + 1];
+      if (nextInput) {
+        nextInput.focus({ preventScroll: true });
+        nextInput.select?.();
+      }
+    });
     input.addEventListener("input", (event) => {
       if (!canEditActiveDay(event.target)) {
         renderTotals();
@@ -4725,16 +4814,6 @@ function handleEntryKeydown(event, row, fieldName) {
   if (event.key !== "Enter") return;
 
   event.preventDefault();
-  if (fieldName === "manualInstantSold" && isActiveManualReview()) {
-    const reviewInputs = Array.from(elements.gameRows.querySelectorAll(".manual-error-input[data-field='manualInstantSold']"));
-    const activeReviewIndex = reviewInputs.indexOf(event.target);
-    const nextReviewInput = reviewInputs[activeReviewIndex + 1];
-    if (nextReviewInput) {
-      nextReviewInput.focus({ preventScroll: true });
-      nextReviewInput.select?.();
-      return;
-    }
-  }
   const rows = Array.from(elements.gameRows.querySelectorAll("tr"));
   const currentIndex = rows.indexOf(row);
 
@@ -6413,6 +6492,8 @@ elements.goldenKeyCashSales?.addEventListener("input", (event) => {
   ensureStoreCashState();
   state.storeCashCount.date = state.businessDate;
   state.storeCashCount.goldenKeyCashSales = normalizeNumber(event.target.value);
+  saveStoreCashDraftForDate(state.businessDate);
+  persistState();
   updateStoreCashTotals();
 });
 elements.saveCashCountButton?.addEventListener("click", saveStoreCashCount);

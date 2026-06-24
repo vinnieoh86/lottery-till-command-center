@@ -1047,6 +1047,11 @@ input[inputmode="numeric"],
   opacity: 0.5;
 }
 
+.book-change-row td {
+  background: rgba(255, 214, 102, 0.28) !important;
+  box-shadow: inset 4px 0 0 rgba(171, 117, 0, 0.78);
+}
+
 .drag-handle {
   display: inline-grid;
   width: 1.3rem;
