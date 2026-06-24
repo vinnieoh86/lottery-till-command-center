@@ -1992,6 +1992,11 @@ function getPreviousEnding(game, date = state.businessDate) {
   const previousLog = state.dailyLogs[previousDate];
   const previousEntry = previousLog?.entries[id];
 
+  // New book changes intentionally reset the prior baseline to 0 even if the
+  // previous day has not been formally saved yet. Without this, the reset is
+  // stored but hidden from the daily/reconcile math and display.
+  if (previousEntry?.bookResetForNewGame) return 0;
+
   if (!previousLog?.savedAt || !previousEntry || previousEntry.todayEnding === "") return "";
   return normalizeNumber(previousEntry.todayEnding);
 }
@@ -3001,6 +3006,7 @@ function renderGames() {
           if (field === "value") {
             updateInventoryField(id, field, event.target.value, { [field]: event.target.dataset.originalValue ?? "" });
             event.target.dataset.originalValue = event.target.value;
+            renderGames();
           } else {
             // Text fields: store raw value in memory only — no cloud save mid-keystroke
             const game = inventory.find((item) => gameId(item) === id);
@@ -3016,6 +3022,7 @@ function renderGames() {
             const game = inventory.find((item) => gameId(item) === id);
             input.value = game?.bookNumber || "";
           }
+          renderGames();
           renderOrderSheet();
           renderSummary();
           renderMonthMatrix();
@@ -3085,6 +3092,7 @@ function markInventoryBookChangedForToday(game, previousSnapshot = {}) {
     bookResetAt: entry.bookChangedAt,
     bookResetBy: entry.bookChangedBy,
   };
+  // Reactivate this box anywhere a new book/game is assigned to it.
   state.orderDc[id] = false;
 }
 
