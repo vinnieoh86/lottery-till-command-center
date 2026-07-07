@@ -1977,13 +1977,46 @@ function getEntry(game, date = state.businessDate) {
   return dayLog.entries[id];
 }
 
+function formatDateKey(date) {
+  return date.toISOString().slice(0,10);
+}
+
+function nthWeekdayOfMonth(year, month, weekday, nth){
+  const d=new Date(year,month,1,12);
+  while(d.getDay()!==weekday)d.setDate(d.getDate()+1);
+  d.setDate(d.getDate()+7*(nth-1));
+  return formatDateKey(d);
+}
+
+function lastWeekdayOfMonth(year, month, weekday){
+  const d=new Date(year,month+1,0,12);
+  while(d.getDay()!==weekday)d.setDate(d.getDate()-1);
+  return formatDateKey(d);
+}
+
+function isStoreHoliday(date){
+  const y=date.getFullYear();
+  const key=formatDateKey(date);
+  const memorial=lastWeekdayOfMonth(y,4,1); // May last Monday
+  const labor=nthWeekdayOfMonth(y,8,1,1); // Sep first Monday
+  const thanksgiving=nthWeekdayOfMonth(y,10,4,4); // Nov fourth Thursday
+  return [
+    `${y}-01-01`,
+    `${y}-07-04`,
+    `${y}-12-25`,
+    memorial,
+    labor,
+    thanksgiving
+  ].includes(key);
+}
+
 function previousOpenDate(date) {
   const previousDate = new Date(`${date}T12:00:00`);
   do {
     previousDate.setDate(previousDate.getDate() - 1);
-  } while (previousDate.getDay() === 0);
+  } while (previousDate.getDay() === 0 || isStoreHoliday(previousDate));
 
-  return previousDate.toISOString().slice(0, 10);
+  return formatDateKey(previousDate);
 }
 
 function getPreviousEnding(game, date = state.businessDate) {
