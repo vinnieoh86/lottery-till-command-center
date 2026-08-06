@@ -643,6 +643,39 @@ function compactScanRecordsForStorage(records = {}) {
   return compact;
 }
 
+function scanRecordMergeKey(record = {}) {
+  if (record.id) return `id:${record.id}`;
+  const firstPhoto = record.photo || (Array.isArray(record.photos) ? record.photos[0] : null) || {};
+  return `legacy:${record.type || "scan"}:${record.savedAt || ""}:${firstPhoto.url || firstPhoto.name || ""}`;
+}
+
+function scanRecordFreshness(record = {}) {
+  return record.reviewedAt || record.processedAt || record.savedAt || "";
+}
+
+function mergeScanRecords(localRecords = {}, cloudRecords = {}) {
+  const merged = {};
+  const byKey = new Map();
+  [cloudRecords || {}, localRecords || {}].forEach((recordsByDate) => {
+    Object.entries(recordsByDate).forEach(([date, records]) => (records || []).forEach((record) => {
+      if (!record) return;
+      const key = scanRecordMergeKey(record);
+      const existing = byKey.get(key);
+      if (!existing || scanRecordFreshness(record) > scanRecordFreshness(existing.record)) {
+        byKey.set(key, { date, record });
+      }
+    }));
+  });
+  byKey.forEach(({ date, record }) => {
+    merged[date] = merged[date] || [];
+    merged[date].push(record);
+  });
+  Object.values(merged).forEach((records) => records.sort((a, b) =>
+    String(a.savedAt || "").localeCompare(String(b.savedAt || "")),
+  ));
+  return merged;
+}
+
 function stateForLocalStorage() {
   state.inventory = inventory;
   return {
@@ -1583,6 +1616,10 @@ async function loadCloudState(options = {}) {
       .sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""))
       .slice(0, 24);
     if (mergedSavedOrders.length > (cloudOrders.length || 0)) _mergeHadLocalNewer = true;
+    const mergedScanRecords = mergeScanRecords(state.scanRecords || {}, cloudState.scanRecords || {});
+    const localScanKeys = new Set(Object.values(state.scanRecords || {}).flat().map(scanRecordMergeKey));
+    const cloudScanKeys = new Set(Object.values(cloudState.scanRecords || {}).flat().map(scanRecordMergeKey));
+    if ([...localScanKeys].some((key) => !cloudScanKeys.has(key))) _mergeHadLocalNewer = true;
     state = normalizeStoredState({
       ...cloudState,
       dailyLogs: mergedDailyLogs,
@@ -1590,6 +1627,7 @@ async function loadCloudState(options = {}) {
       businessDate: activeDate,
       pinSettings: mergedPinSettings,
       savedOrders: mergedSavedOrders,
+      scanRecords: mergedScanRecords,
     });
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     // Never replace inventory from cloud while the user is actively editing it.
@@ -4396,17 +4434,23 @@ function triggerBackgroundManualInstantParse(record, imageUrls, recordDate = sta
 async function uploadScanPhoto(file, targetDate) {
   if (!supabaseClient || !file?.blob) return { url: "", error: "Supabase is offline." };
   const safeName = String(file.name || "sales-summary.jpg").replace(/[^a-z0-9._-]/gi, "-").toLowerCase();
-  const path = `${targetDate}/${Date.now()}-${safeName}`;
-  const { error } = await supabaseClient.storage.from("lottery-scans").upload(path, file.blob, {
-    contentType: "image/jpeg",
-    upsert: true,
-  });
-  if (error) {
-    console.warn("Scan photo storage upload failed", error);
-    return { url: "", error: error.message || "Photo upload failed." };
+  const uniquePart = window.crypto?.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const path = `${targetDate}/${uniquePart}-${safeName}`;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const { error } = await supabaseClient.storage.from("lottery-scans").upload(path, file.blob, {
+      contentType: "image/jpeg",
+      upsert: true,
+    });
+    if (!error) {
+      const { data } = supabaseClient.storage.from("lottery-scans").getPublicUrl(path);
+      const url = data?.publicUrl || "";
+      return url ? { url, error: "" } : { url: "", error: "Photo uploaded but no public URL was returned." };
+    }
+    lastError = error;
+    console.warn(`Scan photo storage upload failed (attempt ${attempt})`, error);
   }
-  const { data } = supabaseClient.storage.from("lottery-scans").getPublicUrl(path);
-  return { url: data?.publicUrl || "", error: "" };
+  return { url: "", error: lastError?.message || "Photo upload failed after 3 attempts." };
 }
 
 async function uploadScanPhotos(files, targetDate) {
@@ -4462,8 +4506,16 @@ async function handleScanFiles(type, fileList) {
   elements.scanParserStatus.textContent = "Compressing photo...";
 
   const compressed = [];
-  for (const file of files) {
-    compressed.push(await compressScanImage(file));
+  try {
+    for (const file of files) {
+      compressed.push(await compressScanImage(file));
+    }
+  } catch (error) {
+    compressed.forEach((file) => URL.revokeObjectURL(file.url));
+    console.error("Scan photo preparation failed", error);
+    elements.scanReviewTitle.textContent = "Photo not added";
+    elements.scanParserStatus.textContent = `Photo error: ${error.message || "Could not prepare this image"}. Try taking a new photo in the app.`;
+    return;
   }
 
   if (type === "manual-instant" && scanDraft.type === "manual-instant" && !scanDraft.parsed) {
