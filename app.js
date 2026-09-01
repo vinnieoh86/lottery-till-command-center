@@ -548,10 +548,12 @@ function mergePersistedDailyLogs(snapshotLogs = {}, standaloneLogs = null) {
   return merged;
 }
 
-function normalizeStoredState(parsed = {}) {
+function normalizeStoredState(parsed = {}, mergeStandalone = true) {
   const defaults = createDefaultState();
-  const mergedDailyLogs = mergePersistedDailyLogs(parsed.dailyLogs || {}, readStandaloneDailyLogs());
-  return {
+  const mergedDailyLogs = mergeStandalone
+    ? mergePersistedDailyLogs(parsed.dailyLogs || {}, readStandaloneDailyLogs())
+    : (parsed.dailyLogs || {});
+  const normalized = {
     ...defaults,
     businessDate: parsed.businessDate || todayIso(),
     inventory: parsed.inventory || inventory,
@@ -589,6 +591,8 @@ function normalizeStoredState(parsed = {}) {
     seedVersions: parsed.seedVersions || {},
     _ownSaveTimestamp: parsed._ownSaveTimestamp || "",
   };
+  normalizeInventorySlots(normalized);
+  return normalized;
 }
 
 function loadState() {
@@ -1496,7 +1500,16 @@ async function loadCloudState(options = {}) {
   let _mergeHadLocalNewer = false;
   try {
     const activeDate = state.businessDate || todayIso();
-    const cloudState = data.state;
+    const cloudState = cloneJson(data.state);
+    if (normalizeInventorySlots(cloudState)) _mergeHadLocalNewer = true;
+    const keepLocalInventory = inventoryEditMode ||
+      (inventory[0]?._inventoryUpdatedAt || "") > (cloudState.inventory?.[0]?._inventoryUpdatedAt || "");
+    if (keepLocalInventory) {
+      if (alignInventorySlots(cloudState, inventory)) _mergeHadLocalNewer = true;
+    } else if (cloudState.inventory) {
+      state.inventory = inventory;
+      remapInventoryDrafts(alignInventorySlots(state, cloudState.inventory));
+    }
 
     // --- Field-level merge for dailyLogs entries ---
     // For each date in cloud, merge entries field-by-field using updatedAt timestamps.
@@ -1628,7 +1641,14 @@ async function loadCloudState(options = {}) {
       pinSettings: mergedPinSettings,
       savedOrders: mergedSavedOrders,
       scanRecords: mergedScanRecords,
-    });
+      ...(keepLocalInventory ? {
+        inventory,
+        orderInventory: state.orderInventory,
+        orderAudit: state.orderAudit,
+        orderDc: state.orderDc,
+        currentOrderPreview: state.currentOrderPreview,
+      } : {}),
+    }, false);
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
     // Never replace inventory from cloud while the user is actively editing it.
     // Outside edit mode, use whichever version has the newer _inventoryUpdatedAt timestamp.
@@ -3198,6 +3218,77 @@ function updateInventoryField(id, field, value, previousOverride = null) {
   persistState();
 }
 
+// Box numbers are the existing storage keys. Move their associated records as a
+// single permutation, so swaps and multi-row moves cannot overwrite one another.
+function remapBoxValues(values, boxMap) {
+  if (!values) return values;
+  return Object.fromEntries(Object.entries(values).map(([box, value]) => [boxMap[box] ?? box, value]));
+}
+
+function remapInventoryData(target, boxMap) {
+  // Explicit false values prevent default DC flags reappearing at the old box on reload.
+  target.orderDc = { ...Object.fromEntries((target.inventory || []).map((game) => [gameId(game), false])), ...(target.orderDc || {}) };
+  Object.values(target.dailyLogs || {}).forEach((log) => {
+    log.entries = remapBoxValues(log.entries, boxMap);
+  });
+  ["orderInventory", "orderAudit", "orderDc"].forEach((key) => {
+    target[key] = remapBoxValues(target[key], boxMap);
+  });
+  // The preview can be the very same object as a saved order: remap it once.
+  const orders = new Set([...(target.savedOrders || []), ...(target.orderHistory || []), target.currentOrderPreview]);
+  orders.forEach((order) => {
+    if (!order) return;
+    (order.rows || []).forEach((row) => { row.box = boxMap[String(row.box)] ?? row.box; });
+    if (order.inputAudit) order.inputAudit = remapBoxValues(order.inputAudit, boxMap);
+  });
+}
+
+function normalizeInventorySlots(target) {
+  const games = target.inventory || [];
+  const slots = games.map((game) => String(game.box)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (new Set(slots).size !== games.length) return null;
+  const boxMap = Object.fromEntries(games.map((game, index) => [gameId(game), slots[index]]));
+  if (Object.entries(boxMap).every(([oldBox, newBox]) => oldBox === newBox)) return null;
+  remapInventoryData(target, boxMap);
+  games.forEach((game, index) => { game.box = slots[index]; });
+  return boxMap;
+}
+
+// Align an older device's box keys before the existing field timestamp merge.
+// Only a complete, unambiguous permutation is safe to infer from old snapshots.
+function alignInventorySlots(target, desiredInventory) {
+  const games = target.inventory || [];
+  if (!games.length || games.length !== desiredInventory.length) return null;
+  const signature = (game) => JSON.stringify([game.bookNumber || "", game.name || "", game.value, game.ticketCount || null]);
+  const destinations = new Map();
+  desiredInventory.forEach((game) => {
+    const key = signature(game);
+    destinations.set(key, [...(destinations.get(key) || []), game]);
+  });
+  const boxMap = {};
+  for (const game of games) {
+    const candidates = destinations.get(signature(game));
+    const match = candidates?.length === 1 ? candidates[0]
+      : candidates?.find((candidate) => gameId(candidate) === gameId(game));
+    if (!match) return null;
+    boxMap[gameId(game)] = gameId(match);
+  }
+  if (new Set(Object.values(boxMap)).size !== games.length) return null;
+  if (Object.entries(boxMap).every(([oldBox, newBox]) => oldBox === newBox)) return null;
+  remapInventoryData(target, boxMap);
+  games.forEach((game) => { game.box = boxMap[gameId(game)]; });
+  games.sort((a, b) => String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
+  return boxMap;
+}
+
+function remapInventoryDrafts(boxMap) {
+  if (!boxMap) return;
+  if (previousDateDraft?.dayLog) {
+    previousDateDraft.dayLog.entries = remapBoxValues(previousDateDraft.dayLog.entries, boxMap);
+  }
+  scanDraft.manualReviewValues = remapBoxValues(scanDraft.manualReviewValues, boxMap);
+}
+
 function reorderInventory(fromId, toId) {
   if (!fromId || !toId || fromId === toId) return;
 
@@ -3207,6 +3298,8 @@ function reorderInventory(fromId, toId) {
 
   const [movedGame] = inventory.splice(fromIndex, 1);
   inventory.splice(toIndex, 0, movedGame);
+  state.inventory = inventory;
+  remapInventoryDrafts(normalizeInventorySlots(state));
   const _rts = new Date().toISOString();
   inventory.forEach((g) => { g._inventoryUpdatedAt = _rts; });
   persistState();
@@ -6150,6 +6243,7 @@ function orderRowsForExport(order) {
       value: currency.format(row.value).replace(".00", ""),
       bookNumber: row.bookNumber || "-",
       game: row.name || "-",
+      dc: Boolean(row.dc || (state.orderDc[row.box] && inventory.some((game) => gameId(game) === String(row.box) && game.bookNumber === row.bookNumber))),
       stock: row.stockOnHand ?? row.qty ?? 0,
       order: row.need,
     }));
@@ -6210,6 +6304,7 @@ function printOrderSheet(orderId) {
           th, td { border: 1px solid #999; padding: 6px; text-align: left; }
           th { background: #e9efe5; }
           td:last-child { font-weight: 700; text-align: center; }
+          .dc-row td { color: #b91c1c !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         </style>
       </head>
       <body>
@@ -6220,7 +6315,7 @@ function printOrderSheet(orderId) {
           <tbody>
             ${
               rows.length
-                ? rows.map((row) => `<tr><td>${row.box}</td><td>${row.value}</td><td>${row.bookNumber}</td><td>${row.game}</td><td>${row.stock}</td><td>${row.order}</td></tr>`).join("")
+                ? rows.map((row) => `<tr class="${row.dc ? "dc-row" : ""}"><td>${row.box}</td><td>${row.value}</td><td>${row.bookNumber}</td><td>${row.game}</td><td>${row.stock}</td><td>${row.order}</td></tr>`).join("")
                 : `<tr><td colspan="6">No books or supplies needed.</td></tr>`
             }
           </tbody>
@@ -6287,6 +6382,7 @@ function printReconcileSheet(date = state.businessDate) {
           th, td { border: 1px solid #a9a9a9; padding: 5px 6px; text-align: left; }
           th { background: #f2f4ea; }
           td { color: #111; }
+          .dc-row td { color: #b91c1c !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .money { text-align: right; white-space: nowrap; }
           .center { text-align: center; }
           .variance-error { color: #9d2424; font-weight: 700; }
@@ -6325,7 +6421,7 @@ function printReconcileSheet(date = state.businessDate) {
             ${
               printableRows.length
                 ? printableRows.map(({ game, tickets, autoSales, manual, hasManual, variance, mismatch, entry }) => `
-                    <tr>
+                    <tr class="${state.orderDc[gameId(game)] ? "dc-row" : ""}">
                       <td class="center">${game.box}</td>
                       <td>${game.bookNumber || "-"}</td>
                       <td>${game.name || "-"}</td>
