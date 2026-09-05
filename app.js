@@ -3384,19 +3384,7 @@ function renderTillInputs() {
       renderCashlessTotalInput();
       renderTotals();
     };
-    input.onchange = async () => {
-      const previousValue = input.dataset.previousValue ?? "";
-      if (!isActiveSalesSummaryReview()) {
-        const ok = await confirmPreviousDateFieldChange(input, previousValue, input.value, () => {
-          state.till[key] = normalizeNumber(previousValue);
-          state.till = normalizeTill(state.till);
-          syncActiveDayDraft();
-          renderTillInputs();
-          renderCashlessTotalInput();
-          renderTotals();
-        });
-        if (!ok) return;
-      }
+    input.onchange = () => {
       input.value = formatDecimalInput(input.value);
       if (isActiveSalesSummaryReview()) {
         scanDraft.salesSummaryReviewValues = {
@@ -3918,7 +3906,8 @@ function renderScanReview() {
           }</strong>
           ${
             record.status === "parse-error"
-              ? `<button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">View photos as PDF</button>`
+              ? `<button class="ghost-button review-scan-button" type="button" data-retry-scan-index="${savedRecords.indexOf(record)}">Retry parse</button>
+                 <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">View photos as PDF</button>`
               : ""
           }
           ${
@@ -4012,6 +4001,26 @@ function renderScanReview() {
       openScanPhotosPdf(photoList);
     });
   });
+  elements.scanReviewRows.querySelectorAll("[data-retry-scan-index]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const recordIndex = Number(button.dataset.retryScanIndex);
+      const record = savedRecords[recordIndex];
+      if (!record) return;
+      record.status = "processing";
+      record.processingError = "";
+      record.processingStartedAt = new Date().toISOString();
+      persistState();
+      renderScanReview();
+      await processQueuedScanRecord(state.businessDate, record);
+      for (const [date, records] of Object.entries(state.scanRecords || {})) {
+        const pendingIndex = (records || []).findIndex((item) => item?.id === record.id && item.status === "pending-review");
+        if (pendingIndex < 0) continue;
+        if (date !== state.businessDate) switchDate(date);
+        loadPendingScanForReview(pendingIndex);
+        break;
+      }
+    });
+  });
   elements.scanReviewRows.querySelectorAll("[data-review-scan-index]").forEach((button) => {
     button.addEventListener("click", () => loadPendingScanForReview(Number(button.dataset.reviewScanIndex)));
   });
@@ -4097,26 +4106,29 @@ async function parseSalesSummaryScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = "Uploading Sales Summary...";
+  elements.scanParserStatus.textContent = "Parsing Sales Summary...";
   elements.applyScanButton.disabled = true;
-  let queuedRecord;
   try {
-    queuedRecord = await queueSalesSummaryScanForBackground(firstFile);
+    const formData = new FormData();
+    formData.append("image", firstFile.blob, firstFile.name || "sales-summary.jpg");
+    formData.append("businessDate", state.businessDate);
+    const data = await invokeSalesSummaryParser(formData);
+    const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
+    scanDraft.parsed = parsed;
+    scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
+    const pendingRecord = await savePendingSalesSummaryScan(parsed);
+    scanDraft.reviewRecordDate = pendingRecord.date;
+    scanDraft.reviewRecordIndex = pendingRecord.index;
+    if (parsed.reportDate && parsed.reportDate !== state.businessDate) switchDate(parsed.reportDate);
+    renderTillInputs();
+    renderTotals();
+    renderScanReview();
+    renderCalendar();
+    elements.scanParserStatus.textContent = "Parsed values are loaded into Lottery Totals. Review, then submit.";
   } catch (error) {
-    console.error("Sales Summary background queue failed", error);
-    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not queue image"}`;
-    return;
+    console.error("Sales Summary parse failed", error);
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse image"}`;
   }
-
-  elements.scanParserStatus.textContent = `Sales Summary uploaded. Parsing in background for ${queuedRecord.date}.`;
-  await showAppNotice({
-    eyebrow: "Upload complete",
-    title: "Queued",
-    body: "Sales Summary photo is uploaded and parsing in the background. Review can happen on this device or any synced device once processing finishes.",
-    confirmText: "OK",
-  });
-  clearScanReview(true);
-  renderCalendar();
 }
 
 async function parseManualInstantScan() {
@@ -4128,26 +4140,22 @@ async function parseManualInstantScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = `Uploading ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
+  elements.scanParserStatus.textContent = `Parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
   elements.applyScanButton.disabled = true;
-  let queuedRecord;
   try {
-    queuedRecord = await queueManualInstantScanForBackground(files);
+    const formData = new FormData();
+    files.forEach((file) => formData.append("images", file.blob, file.name || "ticket-page.jpg"));
+    formData.append("businessDate", state.businessDate);
+    const data = await invokeManualInstantParser(formData);
+    const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
+    scanDraft.parsed = parsed;
+    scanDraft.manualReviewValues = buildManualReviewValues(parsed);
+    await handleManualInstantParsedResult(parsed);
+    elements.scanParserStatus.textContent = "Parsed values are loaded into Manual Sold. Review, then submit.";
   } catch (error) {
-    console.error("Manual instant background queue failed", error);
-    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not queue ticket pages"}`;
-    return;
+    console.error("Manual instant parse failed", error);
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse ticket pages"}`;
   }
-
-  elements.scanParserStatus.textContent = `Ticket pages uploaded. Parsing in background for ${queuedRecord.date}.`;
-  await showAppNotice({
-    eyebrow: "Upload complete",
-    title: "Queued",
-    body: "Ticket sold pages are uploaded and parsing in the background. Review can happen on this device or any synced device once processing finishes.",
-    confirmText: "OK",
-  });
-  clearScanReview(true);
-  renderCalendar();
 }
 
 async function handleManualInstantParsedResult(parsed) {
