@@ -249,8 +249,8 @@
                 <button id="scanSalesSummaryButton" type="button">Scan daily sales summary</button>
                 <button id="scanManualInstantButton" class="ghost-button" type="button">Scan instant sold ticket history</button>
               </div>
-              <input id="salesSummaryScanInput" type="file" accept="image/*" capture="environment" hidden />
-              <input id="manualInstantScanInput" type="file" accept="image/*" capture="environment" multiple hidden />
+              <input id="salesSummaryScanInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment" hidden />
+              <input id="manualInstantScanInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment" multiple hidden />
               <div id="scanReviewPanel" class="scan-review-panel" hidden>
                 <button class="scan-review-toggle" type="button" data-toggle-target="scanReviewBody" aria-expanded="false">
                   <div>
@@ -810,10 +810,9 @@
     </template>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260905-1"></script>
+    <script src="app.js?v=20260908-1"></script>
   </body>
 </html>
-
 
 
 

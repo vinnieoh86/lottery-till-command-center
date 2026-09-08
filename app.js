@@ -3453,19 +3453,31 @@ function scanTypeLabel(type) {
   return "Lottery report";
 }
 
-function compressScanImage(file, maxWidth = 1000, quality = 0.62) {
+function isSupportedScanImage(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  return type.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/i.test(name);
+}
+
+function compressScanImage(file, maxDimension = 2000, quality = 0.88) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Could not read image."));
     reader.onload = () => {
       const image = new Image();
-      image.onerror = () => reject(new Error("Could not load image."));
+      image.onerror = () => reject(new Error("This phone photo could not be opened. If it is HEIC, change the camera to Most Compatible or share it as JPG."));
       image.onload = () => {
-        const scale = Math.min(1, maxWidth / image.width);
+        const longestSide = Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height);
+        const scale = Math.min(1, maxDimension / Math.max(1, longestSide));
         const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(image.width * scale));
-        canvas.height = Math.max(1, Math.round(image.height * scale));
-        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+        canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+        const context = canvas.getContext("2d", { alpha: false });
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(
           (blob) => {
             if (!blob) {
@@ -3476,7 +3488,7 @@ function compressScanImage(file, maxWidth = 1000, quality = 0.62) {
             compressedReader.onerror = () => reject(new Error("Could not prepare compressed image."));
             compressedReader.onload = () => {
               resolve({
-                name: file.name || `scan-${Date.now()}.jpg`,
+                name: `${String(file.name || `scan-${Date.now()}`).replace(/\.[^.]+$/, "")}.jpg`,
                 originalSize: file.size,
                 size: blob.size,
                 blob,
@@ -3519,21 +3531,36 @@ function buildParserChecklist(type) {
 }
 
 function normalizeParsedSalesSummary(parsed = {}) {
+  const value = (...keys) => {
+    const key = keys.find((candidate) => parsed[candidate] !== undefined && parsed[candidate] !== null && parsed[candidate] !== "");
+    return parseScanNumber(key ? parsed[key] : 0);
+  };
   const normalizedDate = normalizeParsedReportDate(parsed.reportDate);
   return {
     reportDate: normalizedDate,
-    grossSales: normalizeNumber(parsed.grossSales),
-    onlineCancels: normalizeNumber(parsed.onlineCancels),
-    onlineCashes: normalizeNumber(parsed.onlineCashes),
-    cashlessOnlineOnlySales: normalizeNumber(parsed.cashlessOnlineOnlySales),
-    instantCashes: normalizeNumber(parsed.instantCashes),
-    cashlessInstantSales: normalizeNumber(parsed.cashlessInstantSales),
-    officePayout: normalizeNumber(parsed.officePayout),
-    misprintWithoutCancel: normalizeNumber(parsed.misprintWithoutCancel),
-    adjustments: normalizeNumber(parsed.adjustments),
+    grossSales: value("grossSales", "gross_sales", "onlineGrossSales"),
+    onlineCancels: value("onlineCancels", "online_cancels", "cancels"),
+    onlineCashes: value("onlineCashes", "online_cashes", "cashes"),
+    cashlessOnlineOnlySales: value("cashlessOnlineOnlySales", "cashless_online_only_sales", "cashlessOnlineSales"),
+    instantCashes: value("instantCashes", "instant_cashes"),
+    cashlessInstantSales: value("cashlessInstantSales", "cashless_instant_sales"),
+    officePayout: value("officePayout", "office_payout"),
+    misprintWithoutCancel: value("misprintWithoutCancel", "misprint_without_cancel", "misprints"),
+    adjustments: value("adjustments", "adjustment"),
     confidence: parsed.confidence || "unknown",
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
   };
+}
+
+function parseScanNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  let raw = String(value ?? "").trim();
+  if (!raw) return 0;
+  const negative = /^\(.*\)$/.test(raw) || /^[−–—-]/.test(raw);
+  raw = raw.replace(/[,$%\s()]/g, "").replace(/[−–—]/g, "-").replace(/[^0-9.+-]/g, "");
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 0;
+  return negative && parsed > 0 ? -parsed : parsed;
 }
 
 function isActiveSalesSummaryReview(date = state.businessDate) {
@@ -3723,17 +3750,17 @@ function normalizeManualInstantParsed(parsed = {}) {
   const normalizedDate = normalizeParsedReportDate(parsed.reportDate || parsed.date || parsed.businessDate);
   const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
   sourceTotals.forEach((item) => {
-    const gameNumber = fixTruncatedGameNumber(String(item.gameNumber||"").trim());
+    const gameNumber = fixTruncatedGameNumber(String(item.gameNumber ?? item.game_number ?? item.game ?? "").trim());
     if (!gameNumber || gameNumber === "0000") return;
-    totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(item.amount);
+    totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + parseScanNumber(item.amount ?? item.total ?? item.sales);
   });
 
   if (!sourceTotals.length && Array.isArray(parsed.lines)) {
     parsed.lines.forEach((line) => {
       if (line.duplicate) return;
-      const gameNumber = fixTruncatedGameNumber(String(line.gameNumber||"").trim());
+      const gameNumber = fixTruncatedGameNumber(String(line.gameNumber ?? line.game_number ?? line.game ?? "").trim());
       if (!gameNumber || gameNumber === "0000") return;
-      totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + normalizeNumber(line.amount);
+      totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + parseScanNumber(line.amount ?? line.total ?? line.sales);
     });
   }
 
@@ -4112,8 +4139,13 @@ async function parseSalesSummaryScan() {
     const formData = new FormData();
     formData.append("image", firstFile.blob, firstFile.name || "sales-summary.jpg");
     formData.append("businessDate", state.businessDate);
-    const data = await invokeSalesSummaryParser(formData);
-    const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
+    const rawParsed = await invokeScanParserWithRetry(
+      invokeSalesSummaryParser,
+      formData,
+      hasUsableSalesSummaryParse,
+      "No sales-summary values were recognized. Retake the photo straight-on with the entire report visible.",
+    );
+    const parsed = normalizeParsedSalesSummary(rawParsed);
     scanDraft.parsed = parsed;
     scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
     const pendingRecord = await savePendingSalesSummaryScan(parsed);
@@ -4146,8 +4178,13 @@ async function parseManualInstantScan() {
     const formData = new FormData();
     files.forEach((file) => formData.append("images", file.blob, file.name || "ticket-page.jpg"));
     formData.append("businessDate", state.businessDate);
-    const data = await invokeManualInstantParser(formData);
-    const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
+    const rawParsed = await invokeScanParserWithRetry(
+      invokeManualInstantParser,
+      formData,
+      hasUsableManualInstantParse,
+      "No instant-sold game rows were recognized. Retake each page straight-on and include every game-number and amount column.",
+    );
+    const parsed = normalizeManualInstantParsed(rawParsed);
     scanDraft.parsed = parsed;
     scanDraft.manualReviewValues = buildManualReviewValues(parsed);
     await handleManualInstantParsedResult(parsed);
@@ -4431,6 +4468,51 @@ async function invokeSalesSummaryParser(formData) {
   return payload;
 }
 
+function unwrapScanParserPayload(payload = {}) {
+  let current = payload;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const next = current?.parsed ?? current?.result ?? current?.data ?? current?.output;
+    if (!next || next === current || typeof next !== "object") break;
+    current = next;
+  }
+  return current && typeof current === "object" ? current : {};
+}
+
+function hasUsableSalesSummaryParse(payload) {
+  const parsed = unwrapScanParserPayload(payload);
+  const knownKeys = [
+    "grossSales", "gross_sales", "onlineGrossSales", "onlineCancels", "online_cancels",
+    "onlineCashes", "online_cashes", "cashlessOnlineOnlySales", "cashless_online_only_sales",
+    "instantCashes", "instant_cashes", "cashlessInstantSales", "cashless_instant_sales",
+    "officePayout", "office_payout", "misprintWithoutCancel", "misprint_without_cancel", "adjustments",
+  ];
+  const recognized = knownKeys.filter((key) => Object.prototype.hasOwnProperty.call(parsed, key));
+  return recognized.length >= 3 && recognized.some((key) => Math.abs(parseScanNumber(parsed[key])) > 0.009);
+}
+
+function hasUsableManualInstantParse(payload) {
+  const parsed = unwrapScanParserPayload(payload);
+  const rows = Array.isArray(parsed.totalsByGame) && parsed.totalsByGame.length
+    ? parsed.totalsByGame
+    : Array.isArray(parsed.lines) ? parsed.lines.filter((line) => !line?.duplicate) : [];
+  return rows.some((row) => String(row?.gameNumber ?? row?.game_number ?? row?.game ?? "").replace(/\D/g, ""));
+}
+
+async function invokeScanParserWithRetry(parser, formData, validator, emptyMessage) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await parser(formData);
+      const parsed = unwrapScanParserPayload(response);
+      if (validator(parsed)) return parsed;
+      lastError = new Error(emptyMessage);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(emptyMessage);
+}
+
 async function invokeManualInstantParser(formData) {
   const functionName = "parse-manual-instant";
   let response;
@@ -4586,8 +4668,18 @@ function currentParsedSalesSummaryFromReview() {
 }
 
 async function handleScanFiles(type, fileList) {
-  const files = Array.from(fileList || []).filter((file) => file.type.startsWith("image/"));
-  if (!files.length) return;
+  const selectedFiles = Array.from(fileList || []);
+  const files = selectedFiles.filter(isSupportedScanImage);
+  if (!files.length) {
+    elements.scanReviewPanel.hidden = false;
+    const scanBody = document.getElementById("scanReviewBody");
+    if (scanBody) scanBody.hidden = false;
+    elements.scanReviewTitle.textContent = "Photo not loaded";
+    elements.scanParserStatus.textContent = selectedFiles.length
+      ? "That file was not recognized as an iPhone/Android photo. Choose a JPG, JPEG, PNG, WEBP, HEIC, or HEIF image."
+      : "No photo was selected.";
+    return;
+  }
 
   elements.scanReviewPanel.hidden = false;
   // Auto-expand the scan body when user actively uploads
