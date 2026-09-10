@@ -1410,6 +1410,20 @@ async function saveCloudState() {
   isSavingCloudState = true;
   pendingCloudSaveRequested = false;
   setSyncStatus("Syncing cloudâ€¦");
+  // Cash drawer entries are edited from several devices. Pull only the latest
+  // cash counts before writing the shared snapshot so an older device cannot
+  // replace a newer employee count while saving an unrelated change.
+  const { data: latestRows, error: latestError } = await supabaseClient
+    .from("app_state_snapshots")
+    .select("state")
+    .eq("store_key", CLOUD_STORE_KEY)
+    .limit(1);
+  if (latestError) {
+    isSavingCloudState = false;
+    setSyncStatus(`Sync paused: ${latestError.message}`);
+    return;
+  }
+  mergeLatestCloudCashCounts(latestRows?.[0]?.state);
   const saveTimestamp = new Date().toISOString();
   // Store in state so realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
   state._ownSaveTimestamp = saveTimestamp;
@@ -1436,6 +1450,32 @@ async function saveCloudState() {
       window.setTimeout(() => saveCloudState(), 50);
     }
   }
+}
+
+function mergeLatestCloudCashCounts(cloudSnapshot) {
+  const cloudLogs = cloudSnapshot?.dailyLogs || {};
+  Object.entries(cloudLogs).forEach(([date, cloudLog]) => {
+    if (!cloudLog?.cashCounts) return;
+    const localLog = state.dailyLogs?.[date];
+    const cloudTimestamp = cloudLog.cashCountsUpdatedAt || cloudLog.savedAt || "";
+    const localTimestamp = localLog?.cashCountsUpdatedAt || localLog?.savedAt || "";
+    if (localLog && localTimestamp >= cloudTimestamp) return;
+
+    const cashCounts = { ...emptyCashCounts(), ...cloudLog.cashCounts };
+    const cashDrawer = calculateCashDrawerFromCounts(cashCounts);
+    const existingTotals = cloudLog.totals || localLog?.totals || {};
+    state.dailyLogs[date] = {
+      ...(localLog || cloudLog),
+      cashCounts,
+      cashCountsUpdatedAt: cloudLog.cashCountsUpdatedAt || cloudTimestamp,
+      totals: {
+        ...existingTotals,
+        cashDrawer,
+        difference: cashDrawer - normalizeNumber(existingTotals.lotterySales),
+      },
+    };
+    if (date === state.businessDate) state.cashCounts = { ...cashCounts };
+  });
 }
 
 async function loadCloudState(options = {}) {
@@ -1798,63 +1838,26 @@ async function processQueuedScanRecord(date, record) {
   activeProcessingScanIds.add(record.id);
   try {
     if (record.type === "sales-summary") {
-      const queuedFile = await fetchScanPhotoAsQueuedFile(urls[0], record.photo?.name || "sales-summary.jpg");
-      const formData = new FormData();
-      formData.append("image", queuedFile.blob, queuedFile.name);
-      formData.append("businessDate", record.selectedBusinessDate || date);
-      const data = await invokeSalesSummaryParser(formData);
-      const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
-      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
-      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
-        ...existingRecord,
-        status: "pending-review",
-        parsed,
-        parsedReportDate: targetDate,
-        processingError: "",
-        processedAt: new Date().toISOString(),
-      }));
-      persistState();
-      await saveCloudState();
-      if (isAdminRole() && state.businessDate === targetDate) {
-        primePendingScanDraftForAdmin();
-        renderScanReview();
-      }
-      renderCalendar();
+      await invokeBackgroundParser("parse-sales-summary", {
+        storeKey: CLOUD_STORE_KEY,
+        recordId: record.id,
+        recordDate: date,
+        selectedBusinessDate: record.selectedBusinessDate || date,
+        imageUrl: urls[0],
+      });
+      await loadCloudState({ quietIfUnchanged: false });
       return;
     }
 
     if (record.type === "manual-instant") {
-      const files = [];
-      for (let index = 0; index < urls.length; index += 1) {
-        files.push(await fetchScanPhotoAsQueuedFile(urls[index], record.photos?.[index]?.name || `ticket-page-${index + 1}.jpg`));
-      }
-      const formData = new FormData();
-      files.forEach((file) => formData.append("images", file.blob, file.name));
-      formData.append("businessDate", record.selectedBusinessDate || date);
-      const data = await invokeManualInstantParser(formData);
-      const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
-      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
-      const parsedTotal = parsedManualInstantTotal(parsed);
-      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
-        ...existingRecord,
-        status: "pending-review",
-        parsed,
-        parsedReportDate: targetDate,
-        processingError: "",
-        processedAt: new Date().toISOString(),
-        totals: {
-          parsedManualInstant: parsedTotal,
-          instantSales: calculateInstantSales(targetDate),
-          difference: parsedTotal - calculateInstantSales(targetDate),
-        },
-      }));
-      persistState();
-      await saveCloudState();
-      if (isAdminRole() && state.businessDate === targetDate) {
-        primePendingScanDraftForAdmin();
-        renderScanReview();
-      }
-      renderCalendar();
+      await invokeBackgroundParser("parse-manual-instant", {
+        storeKey: CLOUD_STORE_KEY,
+        recordId: record.id,
+        recordDate: date,
+        selectedBusinessDate: record.selectedBusinessDate || date,
+        imageUrls: urls,
+      });
+      await loadCloudState({ quietIfUnchanged: false });
     }
   } catch (error) {
     console.error("Queued scan processing failed", error);
@@ -3780,19 +3783,9 @@ function manualInstantMatchedRows(parsed = scanDraft.parsed) {
     .map((item) => {
       const raw = String(item.gameNumber || "").trim();
       const padded = raw.padStart(4, "0").slice(-4);
-      // Try matches in order of confidence:
-      // 1. Exact 4-digit padded match on bookNumber
-      let game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded);
-      // 2. Last 3 digits match (AI sometimes drops leading digit)
-      if (!game && padded.length >= 3) {
-        const last3 = padded.slice(-3);
-        game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0").slice(-3) === last3);
-      }
-      // 3. Numeric value match regardless of leading zeros (e.g. "762" matches "0762")
-      if (!game) {
-        const numericRaw = String(parseInt(raw, 10) || 0);
-        game = inventory.find((c) => String(parseInt(c.bookNumber || "0", 10)) === numericRaw);
-      }
+      // Allocate only by the current game number. Known three-digit OCR
+      // truncations are repaired by normalizeManualInstantParsed first.
+      const game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded);
       return {
         game,
         gameNumber: padded,
@@ -3803,11 +3796,9 @@ function manualInstantMatchedRows(parsed = scanDraft.parsed) {
 }
 
 function findGameByParsedGameNumber(rawGameNumber) {
-  const raw = String(rawGameNumber || "").trim();
-  const padded = raw.padStart(4, "0").slice(-4);
-  return inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded)
-    || inventory.find((c) => String(c.bookNumber || "").padStart(4, "0").slice(-3) === padded.slice(-3))
-    || inventory.find((c) => String(parseInt(c.bookNumber || "0", 10)) === String(parseInt(raw || "0", 10)));
+  const normalized = fixTruncatedGameNumber(rawGameNumber);
+  if (!normalized) return null;
+  return inventory.find((game) => String(game.bookNumber || "").padStart(4, "0") === normalized) || null;
 }
 
 function parsedManualInstantTotal(parsed = scanDraft.parsed) {
@@ -3934,7 +3925,7 @@ function renderScanReview() {
           ${
             record.status === "parse-error"
               ? `<button class="ghost-button review-scan-button" type="button" data-retry-scan-index="${savedRecords.indexOf(record)}">Retry parse</button>
-                 <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">View photos as PDF</button>`
+                 <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">Download photos PDF</button>`
               : ""
           }
           ${
@@ -3999,7 +3990,7 @@ function renderScanReview() {
     .join("");
   elements.scanPhotoPreview.innerHTML = [activePhotos, savedPhotos].filter(Boolean).join("");
 
-  // "View all as PDF" button
+  // Download all saved scan photos as one PDF.
   const allSavedPhotoUrls = savedRecords.flatMap((record) => {
     const photos = record.photos?.length ? record.photos : record.photo ? [record.photo] : [];
     return photos.map((photo) => ({ url: photo?.url || photo?.dataUrl || "", name: photo?.name || "scan.jpg", savedAt: record.savedAt, type: record.type })).filter((p) => p.url);
@@ -4008,7 +3999,7 @@ function renderScanReview() {
     const pdfBtn = document.createElement("button");
     pdfBtn.type = "button";
     pdfBtn.className = "ghost-button scan-pdf-all-button";
-    pdfBtn.textContent = `View all ${allSavedPhotoUrls.length} photo${allSavedPhotoUrls.length === 1 ? "" : "s"} as PDF`;
+    pdfBtn.textContent = `Download ${allSavedPhotoUrls.length} photo${allSavedPhotoUrls.length === 1 ? "" : "s"} as PDF`;
     pdfBtn.addEventListener("click", () => openScanPhotosPdf(allSavedPhotoUrls));
     elements.scanPhotoPreview.appendChild(pdfBtn);
   }
@@ -4104,7 +4095,7 @@ function renderScanReview() {
           : "Photos are compressed and ready to parse.";
 }
 
-function openScanPhotosPdf(photoList) {
+function openPrintableScanPhotos(photoList) {
   const photoHtml = photoList.map((photo, index) => {
     const label = (photo.type === "sales-summary" ? "Sales Summary" : "Manual Instant") + " — Saved " + new Date(photo.savedAt).toLocaleString();
     return '<div class="scan-page"><p class="scan-label">' + (index + 1) + '. ' + label + '</p><img src="' + photo.url + '" alt="Scan ' + (index + 1) + '" /></div>';
@@ -4124,6 +4115,63 @@ function openScanPhotosPdf(photoList) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+function readBlobAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("Could not read saved scan photo."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadScanImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load saved scan photo."));
+    img.src = dataUrl;
+  });
+}
+
+async function openScanPhotosPdf(photoList) {
+  const JsPdf = window.jspdf?.jsPDF;
+  if (!JsPdf) {
+    openPrintableScanPhotos(photoList);
+    return;
+  }
+  const dateLabel = state.businessDate || todayIso();
+  const pdf = new JsPdf({ unit: "pt", format: "letter", orientation: "portrait" });
+  try {
+    for (let index = 0; index < photoList.length; index += 1) {
+      const photo = photoList[index];
+      const response = await fetch(photo.url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Saved photo ${index + 1} could not be downloaded.`);
+      const dataUrl = await readBlobAsDataUrl(await response.blob());
+      const image = await loadScanImage(dataUrl);
+      if (index > 0) pdf.addPage("letter", "portrait");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 30;
+      const labelHeight = 28;
+      const availableWidth = pageWidth - margin * 2;
+      const availableHeight = pageHeight - margin * 2 - labelHeight;
+      const scale = Math.min(availableWidth / image.naturalWidth, availableHeight / image.naturalHeight);
+      const width = image.naturalWidth * scale;
+      const height = image.naturalHeight * scale;
+      const x = (pageWidth - width) / 2;
+      const label = `${index + 1}. ${photo.type === "sales-summary" ? "Sales Summary" : "Instant Sold Ticket History"} - ${new Date(photo.savedAt).toLocaleString()}`;
+      pdf.setFontSize(9);
+      pdf.text(label, margin, margin);
+      pdf.addImage(dataUrl, "JPEG", x, margin + labelHeight, width, height, undefined, "FAST");
+    }
+    pdf.save(`lottery-scans-${dateLabel}.pdf`);
+  } catch (error) {
+    console.error("PDF creation failed", error);
+    elements.scanParserStatus.textContent = `PDF error: ${error.message || "Could not create PDF"}. Opening printable copy instead.`;
+    openPrintableScanPhotos(photoList);
+  }
+}
+
 async function parseSalesSummaryScan() {
   const firstFile = scanDraft.files?.[0];
   if (!firstFile) return;
@@ -4133,33 +4181,22 @@ async function parseSalesSummaryScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = "Parsing Sales Summary...";
+  elements.scanParserStatus.textContent = "Uploading and parsing Sales Summary...";
   elements.applyScanButton.disabled = true;
+  let queued = null;
   try {
-    const formData = new FormData();
-    formData.append("image", firstFile.blob, firstFile.name || "sales-summary.jpg");
-    formData.append("businessDate", state.businessDate);
-    const rawParsed = await invokeScanParserWithRetry(
-      invokeSalesSummaryParser,
-      formData,
-      hasUsableSalesSummaryParse,
-      "No sales-summary values were recognized. Retake the photo straight-on with the entire report visible.",
-    );
-    const parsed = normalizeParsedSalesSummary(rawParsed);
-    scanDraft.parsed = parsed;
-    scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
-    const pendingRecord = await savePendingSalesSummaryScan(parsed);
-    scanDraft.reviewRecordDate = pendingRecord.date;
-    scanDraft.reviewRecordIndex = pendingRecord.index;
-    if (parsed.reportDate && parsed.reportDate !== state.businessDate) switchDate(parsed.reportDate);
-    renderTillInputs();
-    renderTotals();
-    renderScanReview();
-    renderCalendar();
-    elements.scanParserStatus.textContent = "Parsed values are loaded into Lottery Totals. Review, then submit.";
+    queued = await queueSalesSummaryScanForBackground(firstFile);
+    await invokeBackgroundParser("parse-sales-summary", {
+      storeKey: CLOUD_STORE_KEY,
+      recordId: queued.record.id,
+      recordDate: queued.date,
+      selectedBusinessDate: queued.record.selectedBusinessDate || queued.date,
+      imageUrl: queued.record.photo.url,
+    });
+    await loadParsedScanForReview(queued.record.id, "Lottery Totals");
   } catch (error) {
     console.error("Sales Summary parse failed", error);
-    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse image"}`;
+    await recoverSavedScanAfterParseFailure(queued, error);
   }
 }
 
@@ -4172,27 +4209,51 @@ async function parseManualInstantScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = `Parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
+  elements.scanParserStatus.textContent = `Uploading and parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
   elements.applyScanButton.disabled = true;
+  let queued = null;
   try {
-    const formData = new FormData();
-    files.forEach((file) => formData.append("images", file.blob, file.name || "ticket-page.jpg"));
-    formData.append("businessDate", state.businessDate);
-    const rawParsed = await invokeScanParserWithRetry(
-      invokeManualInstantParser,
-      formData,
-      hasUsableManualInstantParse,
-      "No instant-sold game rows were recognized. Retake each page straight-on and include every game-number and amount column.",
-    );
-    const parsed = normalizeManualInstantParsed(rawParsed);
-    scanDraft.parsed = parsed;
-    scanDraft.manualReviewValues = buildManualReviewValues(parsed);
-    await handleManualInstantParsedResult(parsed);
-    elements.scanParserStatus.textContent = "Parsed values are loaded into Manual Sold. Review, then submit.";
+    queued = await queueManualInstantScanForBackground(files);
+    const imageUrls = (queued.record.photos || []).map((photo) => photo.url).filter(Boolean);
+    await invokeBackgroundParser("parse-manual-instant", {
+      storeKey: CLOUD_STORE_KEY,
+      recordId: queued.record.id,
+      recordDate: queued.date,
+      selectedBusinessDate: queued.record.selectedBusinessDate || queued.date,
+      imageUrls,
+    });
+    await loadParsedScanForReview(queued.record.id, "Manual Sold");
   } catch (error) {
     console.error("Manual instant parse failed", error);
-    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse ticket pages"}`;
+    await recoverSavedScanAfterParseFailure(queued, error);
   }
+}
+
+async function recoverSavedScanAfterParseFailure(queued, error) {
+  if (queued?.record?.id) {
+    await loadCloudState({ quietIfUnchanged: false });
+    renderScanReview();
+    elements.scanParserStatus.textContent = `Photo saved for review. Parser error: ${error.message || "Could not extract values"}`;
+    return;
+  }
+  elements.scanParserStatus.textContent = `Upload error: ${error.message || "Could not save photo"}`;
+}
+
+async function loadParsedScanForReview(recordId, destinationLabel) {
+  await loadCloudState({ quietIfUnchanged: false });
+  for (const [date, records] of Object.entries(state.scanRecords || {})) {
+    const index = (records || []).findIndex((record) => record?.id === recordId);
+    if (index < 0) continue;
+    const record = records[index];
+    if (record.status !== "pending-review" || !record.parsed) {
+      throw new Error(record.processingError || "The parser did not return extracted values.");
+    }
+    if (date !== state.businessDate) switchDate(date);
+    loadPendingScanForReview(index);
+    elements.scanParserStatus.textContent = `Parsed values are loaded into ${destinationLabel}. Review, then submit.`;
+    return record;
+  }
+  throw new Error("The parsed scan could not be found after processing.");
 }
 
 async function handleManualInstantParsedResult(parsed) {
@@ -4318,7 +4379,6 @@ async function queueSalesSummaryScanForBackground(file) {
   state.scanRecords[targetDate].push(record);
   persistState();
   await saveCloudState();
-  triggerBackgroundSalesSummaryParse(record, photoUpload.url);
   return { date: targetDate, index: state.scanRecords[targetDate].length - 1, record };
 }
 
@@ -4350,7 +4410,6 @@ async function queueManualInstantScanForBackground(files) {
   state.scanRecords[targetDate].push(record);
   persistState();
   await saveCloudState();
-  triggerBackgroundManualInstantParse(record, uploadedUrls);
   return { date: targetDate, index: state.scanRecords[targetDate].length - 1, record };
 }
 
