@@ -356,6 +356,8 @@ let activeView = "daily";
 let reconcileVisible = false;
 let scanDraft = { type: "", files: [], parsed: null, salesSummaryReviewValues: null, manualReviewValues: null };
 let cloudSaveTimer = null;
+let deferredCloudLoadDuringEditing = false;
+let secondaryReportRenderTimer = null;
 let isApplyingCloudState = false;
 let accessRole = null;
 let currentUser = null;
@@ -1372,8 +1374,9 @@ function scheduleCloudSave() {
   window.clearTimeout(cloudSaveTimer);
   setSyncStatus("Cloud sync queued");
   cloudSaveTimer = window.setTimeout(() => {
+    cloudSaveTimer = null;
     saveCloudState();
-  }, 80);
+  }, 650);
 }
 
 function isGameEntryFieldActive() {
@@ -1381,11 +1384,42 @@ function isGameEntryFieldActive() {
   return Boolean(active && active.matches("[data-field='todayEnding'], [data-field='manualInstantSold']"));
 }
 
+function isEditableFieldActive() {
+  const active = document.activeElement;
+  return Boolean(
+    active &&
+    active.matches("input:not([disabled]):not([readonly]), select:not([disabled]), textarea:not([disabled])")
+  );
+}
+
+function renderSecondaryReportsWhenIdle() {
+  window.clearTimeout(secondaryReportRenderTimer);
+  secondaryReportRenderTimer = window.setTimeout(() => {
+    if (isEditableFieldActive()) {
+      renderSecondaryReportsWhenIdle();
+      return;
+    }
+    secondaryReportRenderTimer = null;
+    renderSummary();
+    renderMonthMatrix();
+  }, 300);
+}
+
+function resumeCloudAfterEditing() {
+  window.setTimeout(() => {
+    if (isEditableFieldActive()) return;
+    renderSecondaryReportsWhenIdle();
+    if (!supabaseClient || !deferredCloudLoadDuringEditing) return;
+    deferredCloudLoadDuringEditing = false;
+    loadCloudState({ quietIfUnchanged: true });
+  }, 0);
+}
+
 function ensureCloudPolling() {
   if (!supabaseClient || cloudPollTimer) return;
   cloudPollTimer = window.setInterval(async () => {
     // Skip cloud sync entirely while a game entry field is focused — avoids DOM rebuild mid-typing
-    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isGameEntryFieldActive() || inventoryEditMode) return;
+    if (document.hidden || isApplyingCloudState || isSavingCloudState || isLoadingCloudState || !supabaseClient || isEditableFieldActive() || inventoryEditMode) return;
     await loadCloudState({ quietIfUnchanged: true });
   }, 1200);
 }
@@ -1533,6 +1567,15 @@ async function loadCloudState(options = {}) {
       pendingCloudLoadQuiet = true;
       window.setTimeout(() => loadCloudState({ quietIfUnchanged: rerunQuiet }), 50);
     }
+    return;
+  }
+
+  // A cloud request may have started just before the employee tapped a field.
+  // Never replace live input nodes while a phone keyboard is active; load the
+  // newest cloud state immediately after the employee leaves the field.
+  if (isEditableFieldActive()) {
+    deferredCloudLoadDuringEditing = true;
+    isLoadingCloudState = false;
     return;
   }
 
@@ -1893,8 +1936,13 @@ function maybeResumeProcessingScans() {
 async function handleIncomingCloudChange(payload) {
   const payloadSaveTs = payload?.new?.state?._ownSaveTimestamp;
   const isOwnEcho = payloadSaveTs && payloadSaveTs === state._ownSaveTimestamp;
-  // Don't apply cloud changes while a game entry field is focused — rebuilding DOM mid-typing causes jumps
-  if (isApplyingCloudState || isOwnEcho || isGameEntryFieldActive()) return;
+  // Never apply cloud changes while any entry field is focused. Rebuilding the
+  // DOM mid-entry closes mobile keyboards and makes the active cell disappear.
+  if (isApplyingCloudState || isOwnEcho) return;
+  if (isEditableFieldActive()) {
+    deferredCloudLoadDuringEditing = true;
+    return;
+  }
   const activeDate = state.businessDate || todayIso();
   const previousScanCount = (state.scanRecords?.[activeDate] || []).length;
   const previousLastSaved = state.lastSavedAt;
@@ -3446,8 +3494,15 @@ function renderTotals() {
   elements.reportDifferenceTotal.style.color = diffColor;
   renderInstantMismatch(instantSales, manualInstant);
   elements.auditLog.textContent = JSON.stringify(buildAuditPayload(), null, 2);
-  renderSummary();
-  renderMonthMatrix();
+  // Summary and month reports are comparatively expensive on phones. The
+  // live row and totals above still update immediately; defer only the heavy
+  // background reports until the employee finishes the active field.
+  if (isEditableFieldActive()) {
+    renderSecondaryReportsWhenIdle();
+  } else {
+    renderSummary();
+    renderMonthMatrix();
+  }
 }
 
 function scanTypeLabel(type) {
@@ -6872,6 +6927,7 @@ document.addEventListener("focusout", (event) => {
   if (event.target.matches("input:not([type='checkbox']):not([type='date']), textarea")) {
     delete event.target.dataset.focusValue;
   }
+  resumeCloudAfterEditing();
 });
 
 // Select-all on click for manual sold $ inputs
