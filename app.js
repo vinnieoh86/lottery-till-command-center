@@ -1,4 +1,4 @@
-﻿const STORAGE_KEY = "lotteryTillState:v2";
+const STORAGE_KEY = "lotteryTillState:v2";
 const STORAGE_BACKUP_KEY = "lotteryTillStateBackup:v1";
 const DAILY_LOGS_KEY = "lotteryTillDailyLogs:v1";
 const SESSION_KEY = "lotteryTillSession:v1";
@@ -1881,26 +1881,63 @@ async function processQueuedScanRecord(date, record) {
   activeProcessingScanIds.add(record.id);
   try {
     if (record.type === "sales-summary") {
-      await invokeBackgroundParser("parse-sales-summary", {
-        storeKey: CLOUD_STORE_KEY,
-        recordId: record.id,
-        recordDate: date,
-        selectedBusinessDate: record.selectedBusinessDate || date,
-        imageUrl: urls[0],
-      });
-      await loadCloudState({ quietIfUnchanged: false });
+      const queuedFile = await fetchScanPhotoAsQueuedFile(urls[0], record.photo?.name || "sales-summary.jpg");
+      const formData = new FormData();
+      formData.append("image", queuedFile.blob, queuedFile.name);
+      formData.append("businessDate", record.selectedBusinessDate || date);
+      const data = await invokeSalesSummaryParser(formData);
+      const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
+      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
+      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
+        ...existingRecord,
+        status: "pending-review",
+        parsed,
+        parsedReportDate: targetDate,
+        processingError: "",
+        processedAt: new Date().toISOString(),
+      }));
+      persistState();
+      await saveCloudState();
+      if (isAdminRole() && state.businessDate === targetDate) {
+        primePendingScanDraftForAdmin();
+        renderScanReview();
+      }
+      renderCalendar();
       return;
     }
 
     if (record.type === "manual-instant") {
-      await invokeBackgroundParser("parse-manual-instant", {
-        storeKey: CLOUD_STORE_KEY,
-        recordId: record.id,
-        recordDate: date,
-        selectedBusinessDate: record.selectedBusinessDate || date,
-        imageUrls: urls,
-      });
-      await loadCloudState({ quietIfUnchanged: false });
+      const files = [];
+      for (let index = 0; index < urls.length; index += 1) {
+        files.push(await fetchScanPhotoAsQueuedFile(urls[index], record.photos?.[index]?.name || `ticket-page-${index + 1}.jpg`));
+      }
+      const formData = new FormData();
+      files.forEach((file) => formData.append("images", file.blob, file.name));
+      formData.append("businessDate", record.selectedBusinessDate || date);
+      const data = await invokeManualInstantParser(formData);
+      const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
+      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
+      const parsedTotal = parsedManualInstantTotal(parsed);
+      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
+        ...existingRecord,
+        status: "pending-review",
+        parsed,
+        parsedReportDate: targetDate,
+        processingError: "",
+        processedAt: new Date().toISOString(),
+        totals: {
+          parsedManualInstant: parsedTotal,
+          instantSales: calculateInstantSales(targetDate),
+          difference: parsedTotal - calculateInstantSales(targetDate),
+        },
+      }));
+      persistState();
+      await saveCloudState();
+      if (isAdminRole() && state.businessDate === targetDate) {
+        primePendingScanDraftForAdmin();
+        renderScanReview();
+      }
+      renderCalendar();
     }
   } catch (error) {
     console.error("Queued scan processing failed", error);
@@ -4236,22 +4273,33 @@ async function parseSalesSummaryScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = "Uploading and parsing Sales Summary...";
+  elements.scanParserStatus.textContent = "Parsing Sales Summary...";
   elements.applyScanButton.disabled = true;
-  let queued = null;
   try {
-    queued = await queueSalesSummaryScanForBackground(firstFile);
-    await invokeBackgroundParser("parse-sales-summary", {
-      storeKey: CLOUD_STORE_KEY,
-      recordId: queued.record.id,
-      recordDate: queued.date,
-      selectedBusinessDate: queued.record.selectedBusinessDate || queued.date,
-      imageUrl: queued.record.photo.url,
-    });
-    await loadParsedScanForReview(queued.record.id, "Lottery Totals");
+    const formData = new FormData();
+    formData.append("image", firstFile.blob, firstFile.name || "sales-summary.jpg");
+    formData.append("businessDate", state.businessDate);
+    const rawParsed = await invokeScanParserWithRetry(
+      invokeSalesSummaryParser,
+      formData,
+      hasUsableSalesSummaryParse,
+      "No sales-summary values were recognized. Retake the photo straight-on with the entire report visible.",
+    );
+    const parsed = normalizeParsedSalesSummary(rawParsed);
+    scanDraft.parsed = parsed;
+    scanDraft.salesSummaryReviewValues = buildSalesSummaryReviewValues(parsed);
+    const pendingRecord = await savePendingSalesSummaryScan(parsed);
+    scanDraft.reviewRecordDate = pendingRecord.date;
+    scanDraft.reviewRecordIndex = pendingRecord.index;
+    if (parsed.reportDate && parsed.reportDate !== state.businessDate) switchDate(parsed.reportDate);
+    renderTillInputs();
+    renderTotals();
+    renderScanReview();
+    renderCalendar();
+    elements.scanParserStatus.textContent = "Parsed values are loaded into Lottery Totals. Review, then submit.";
   } catch (error) {
     console.error("Sales Summary parse failed", error);
-    await recoverSavedScanAfterParseFailure(queued, error);
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse image"}`;
   }
 }
 
@@ -4264,23 +4312,26 @@ async function parseManualInstantScan() {
     return;
   }
 
-  elements.scanParserStatus.textContent = `Uploading and parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
+  elements.scanParserStatus.textContent = `Parsing ${files.length} ticket sold photo${files.length === 1 ? "" : "s"}...`;
   elements.applyScanButton.disabled = true;
-  let queued = null;
   try {
-    queued = await queueManualInstantScanForBackground(files);
-    const imageUrls = (queued.record.photos || []).map((photo) => photo.url).filter(Boolean);
-    await invokeBackgroundParser("parse-manual-instant", {
-      storeKey: CLOUD_STORE_KEY,
-      recordId: queued.record.id,
-      recordDate: queued.date,
-      selectedBusinessDate: queued.record.selectedBusinessDate || queued.date,
-      imageUrls,
-    });
-    await loadParsedScanForReview(queued.record.id, "Manual Sold");
+    const formData = new FormData();
+    files.forEach((file) => formData.append("images", file.blob, file.name || "ticket-page.jpg"));
+    formData.append("businessDate", state.businessDate);
+    const rawParsed = await invokeScanParserWithRetry(
+      invokeManualInstantParser,
+      formData,
+      hasUsableManualInstantParse,
+      "No instant-sold game rows were recognized. Retake each page straight-on and include every game-number and amount column.",
+    );
+    const parsed = normalizeManualInstantParsed(rawParsed);
+    scanDraft.parsed = parsed;
+    scanDraft.manualReviewValues = buildManualReviewValues(parsed);
+    await handleManualInstantParsedResult(parsed);
+    elements.scanParserStatus.textContent = "Parsed values are loaded into Manual Sold. Review, then submit.";
   } catch (error) {
     console.error("Manual instant parse failed", error);
-    await recoverSavedScanAfterParseFailure(queued, error);
+    elements.scanParserStatus.textContent = `Parser error: ${error.message || "Could not parse ticket pages"}`;
   }
 }
 

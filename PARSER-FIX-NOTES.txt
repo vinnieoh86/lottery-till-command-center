@@ -1,0 +1,22 @@
+Lottery Till parser-only repair
+===============================
+
+Changed ONLY these app.js parser functions:
+- processQueuedScanRecord
+- parseSalesSummaryScan
+- parseManualInstantScan
+
+Purpose:
+Restore the previously working direct multipart Edge Function parser flow.
+This removes the newer dependency where the Edge Function had to mutate the cloud scan record before the browser could load parsed results.
+
+NOT changed:
+- inventory/game mapping data
+- today's/yesterday's number logic
+- ticket calculations
+- manual sold input behavior
+- mobile input-stability fix
+- UI/layout/CSS
+- Supabase schema
+
+Source base: ZIP #15, with only the three parser functions restored from the known-good #11 parser implementation.
