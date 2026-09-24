@@ -4022,7 +4022,7 @@ function renderScanReview() {
           }</strong>
           ${
             record.status === "parse-error"
-              ? `<div class="scan-parse-error-detail"><strong>Parser error:</strong> ${escapeHtml(record.processingError || "No parser error details were returned.")}</div>
+              ? `<div class="scan-parse-error-detail"><strong>Parser error:</strong> ${String(record.processingError || "No parser error details were returned.").replace(/[&<>"\']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "\'": "&#39;" }[char]))}</div>
                  <button class="ghost-button review-scan-button" type="button" data-retry-scan-index="${index}">Retry parse</button>
                  <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${index}">Download photos PDF</button>`
               : ""
