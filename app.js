@@ -4000,11 +4000,17 @@ function renderScanReview() {
     : buildParserChecklist(scanDraft.type)
         .map((item) => `<div class="scan-review-row"><span>Check</span><strong>${item}</strong></div>`)
         .join("");
+  // Parser diagnostics: keep one actionable failed card per scan type.
+  // Older saved photos stay available below; retry reuses this same saved record.
+  const newestParseErrorIndexByType = {};
+  savedRecords.forEach((record, index) => {
+    if (record?.status === "parse-error") newestParseErrorIndexByType[record.type] = index;
+  });
   const savedRows = savedRecords
-    .slice()
+    .map((record, index) => ({ record, index }))
+    .filter(({ record, index }) => record?.status !== "parse-error" || newestParseErrorIndexByType[record.type] === index)
     .reverse()
-    .map(
-      (record) => `
+    .map(({ record, index }) => `
         <div class="scan-review-row parsed">
           <span>${scanTypeLabel(record.type)} saved ${new Date(record.savedAt).toLocaleString()}</span>
           <strong>${
@@ -4016,18 +4022,18 @@ function renderScanReview() {
           }</strong>
           ${
             record.status === "parse-error"
-              ? `<button class="ghost-button review-scan-button" type="button" data-retry-scan-index="${savedRecords.indexOf(record)}">Retry parse</button>
-                 <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${savedRecords.indexOf(record)}">Download photos PDF</button>`
+              ? `<div class="scan-parse-error-detail"><strong>Parser error:</strong> ${escapeHtml(record.processingError || "No parser error details were returned.")}</div>
+                 <button class="ghost-button review-scan-button" type="button" data-retry-scan-index="${index}">Retry parse</button>
+                 <button class="ghost-button view-parse-error-photos-btn" type="button" data-parse-error-index="${index}">Download photos PDF</button>`
               : ""
           }
           ${
             isAdminRole() && record.status === "pending-review"
-              ? `<button class="ghost-button review-scan-button" type="button" data-review-scan-index="${savedRecords.indexOf(record)}">Review scan</button>`
+              ? `<button class="ghost-button review-scan-button" type="button" data-review-scan-index="${index}">Review scan</button>`
               : ""
           }
         </div>
-      `,
-    )
+      `)
     .join("");
   elements.scanReviewRows.innerHTML = [!userUploadOnly && scanDraft.parsed ? activeRows : files.length ? activeRows : "", !userUploadOnly ? savedRows : ""]
     .filter(Boolean)
