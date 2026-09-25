@@ -1881,63 +1881,26 @@ async function processQueuedScanRecord(date, record) {
   activeProcessingScanIds.add(record.id);
   try {
     if (record.type === "sales-summary") {
-      const queuedFile = await fetchScanPhotoAsQueuedFile(urls[0], record.photo?.name || "sales-summary.jpg");
-      const formData = new FormData();
-      formData.append("image", queuedFile.blob, queuedFile.name);
-      formData.append("businessDate", record.selectedBusinessDate || date);
-      const data = await invokeSalesSummaryParser(formData);
-      const parsed = normalizeParsedSalesSummary(data?.parsed || data || {});
-      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
-      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
-        ...existingRecord,
-        status: "pending-review",
-        parsed,
-        parsedReportDate: targetDate,
-        processingError: "",
-        processedAt: new Date().toISOString(),
-      }));
-      persistState();
-      await saveCloudState();
-      if (isAdminRole() && state.businessDate === targetDate) {
-        primePendingScanDraftForAdmin();
-        renderScanReview();
-      }
-      renderCalendar();
+      await invokeBackgroundParser("parse-sales-summary", {
+        storeKey: CLOUD_STORE_KEY,
+        recordId: record.id,
+        recordDate: date,
+        selectedBusinessDate: record.selectedBusinessDate || date,
+        imageUrl: urls[0],
+      });
+      await loadCloudState({ quietIfUnchanged: false });
       return;
     }
 
     if (record.type === "manual-instant") {
-      const files = [];
-      for (let index = 0; index < urls.length; index += 1) {
-        files.push(await fetchScanPhotoAsQueuedFile(urls[index], record.photos?.[index]?.name || `ticket-page-${index + 1}.jpg`));
-      }
-      const formData = new FormData();
-      files.forEach((file) => formData.append("images", file.blob, file.name));
-      formData.append("businessDate", record.selectedBusinessDate || date);
-      const data = await invokeManualInstantParser(formData);
-      const parsed = normalizeManualInstantParsed(data?.parsed || data || {});
-      const targetDate = parsed.reportDate || record.selectedBusinessDate || date;
-      const parsedTotal = parsedManualInstantTotal(parsed);
-      upsertProcessedScanRecord(date, record.id, targetDate, (existingRecord) => ({
-        ...existingRecord,
-        status: "pending-review",
-        parsed,
-        parsedReportDate: targetDate,
-        processingError: "",
-        processedAt: new Date().toISOString(),
-        totals: {
-          parsedManualInstant: parsedTotal,
-          instantSales: calculateInstantSales(targetDate),
-          difference: parsedTotal - calculateInstantSales(targetDate),
-        },
-      }));
-      persistState();
-      await saveCloudState();
-      if (isAdminRole() && state.businessDate === targetDate) {
-        primePendingScanDraftForAdmin();
-        renderScanReview();
-      }
-      renderCalendar();
+      await invokeBackgroundParser("parse-manual-instant", {
+        storeKey: CLOUD_STORE_KEY,
+        recordId: record.id,
+        recordDate: date,
+        selectedBusinessDate: record.selectedBusinessDate || date,
+        imageUrls: urls,
+      });
+      await loadCloudState({ quietIfUnchanged: false });
     }
   } catch (error) {
     console.error("Queued scan processing failed", error);
