@@ -3556,50 +3556,80 @@ function isSupportedScanImage(file) {
 
 function compressScanImage(file, maxDimension = 2000, quality = 0.88) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read image."));
-    reader.onload = () => {
-      const image = new Image();
-      image.onerror = () => reject(new Error("This phone photo could not be opened. If it is HEIC, change the camera to Most Compatible or share it as JPG."));
-      image.onload = () => {
+    let settled = false;
+    let sourceUrl = "";
+    const timeoutId = window.setTimeout(() => {
+      fail(new Error("Photo processing timed out. Try taking a new photo or choose a JPG from the photo library."));
+    }, 45000);
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+      sourceUrl = "";
+    };
+
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error || "Could not prepare image.")));
+    };
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const image = new Image();
+    image.onerror = () => fail(new Error("This phone photo could not be opened. If it is HEIC, change the camera to Most Compatible or share it as JPG."));
+    image.onload = () => {
+      try {
         const longestSide = Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height);
         const scale = Math.min(1, maxDimension / Math.max(1, longestSide));
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
         canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
         const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("This phone could not create space to process the photo.");
         context.fillStyle = "#ffffff";
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        if (typeof canvas.toBlob !== "function") {
+          throw new Error("This browser cannot compress photos. Please update the browser and try again.");
+        }
         canvas.toBlob(
           (blob) => {
             if (!blob) {
-              reject(new Error("Could not compress image."));
+              fail(new Error("Could not compress image."));
               return;
             }
-            const compressedReader = new FileReader();
-            compressedReader.onerror = () => reject(new Error("Could not prepare compressed image."));
-            compressedReader.onload = () => {
-              resolve({
-                name: `${String(file.name || `scan-${Date.now()}`).replace(/\.[^.]+$/, "")}.jpg`,
-                originalSize: file.size,
-                size: blob.size,
-                blob,
-                dataUrl: compressedReader.result,
-                url: URL.createObjectURL(blob),
-              });
-            };
-            compressedReader.readAsDataURL(blob);
+            finish({
+              name: `${String(file.name || `scan-${Date.now()}`).replace(/\.[^.]+$/, "")}.jpg`,
+              originalSize: file.size,
+              size: blob.size,
+              blob,
+              dataUrl: "",
+              url: URL.createObjectURL(blob),
+            });
           },
           "image/jpeg",
           quality,
         );
-      };
-      image.src = reader.result;
+      } catch (error) {
+        fail(error);
+      }
     };
-    reader.readAsDataURL(file);
+
+    try {
+      sourceUrl = URL.createObjectURL(file);
+      image.src = sourceUrl;
+    } catch (error) {
+      fail(error);
+    }
   });
 }
 
