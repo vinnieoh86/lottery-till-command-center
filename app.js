@@ -1458,6 +1458,7 @@ async function saveCloudState() {
     return;
   }
   mergeLatestCloudCashCounts(latestRows?.[0]?.state);
+  mergeLatestCloudInventory(latestRows?.[0]?.state);
   const saveTimestamp = new Date().toISOString();
   // Store in state so realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
   state._ownSaveTimestamp = saveTimestamp;
@@ -1510,6 +1511,61 @@ function mergeLatestCloudCashCounts(cloudSnapshot) {
     };
     if (date === state.businessDate) state.cashCounts = { ...cashCounts };
   });
+}
+
+function inventoryRowUpdatedAt(game) {
+  return String(game?._inventoryUpdatedAt || "");
+}
+
+function hasProtectedInventoryRowVersion(game) {
+  return normalizeNumber(game?._inventorySyncVersion) >= 2;
+}
+
+// Inventory is shared across devices, but each box is edited independently.
+// Merge one box at a time so saving an unrelated change from an older device
+// cannot restore stale book numbers across the entire inventory.
+function mergeInventoryRows(localRows = [], cloudRows = []) {
+  const localByBox = new Map((localRows || []).map((game) => [gameId(game), game]));
+  const cloudByBox = new Map((cloudRows || []).map((game) => [gameId(game), game]));
+  const boxes = new Set([...localByBox.keys(), ...cloudByBox.keys()]);
+  let localNewer = false;
+
+  const merged = Array.from(boxes).map((box) => {
+    const localGame = localByBox.get(box);
+    const cloudGame = cloudByBox.get(box);
+    if (!cloudGame) {
+      if (localGame) localNewer = true;
+      return localGame;
+    }
+    if (!localGame) return cloudGame;
+
+    const localProtected = hasProtectedInventoryRowVersion(localGame);
+    const cloudProtected = hasProtectedInventoryRowVersion(cloudGame);
+    if (localProtected !== cloudProtected) {
+      if (localProtected) localNewer = true;
+      return localProtected ? localGame : cloudGame;
+    }
+
+    const localTs = inventoryRowUpdatedAt(localGame);
+    const cloudTs = inventoryRowUpdatedAt(cloudGame);
+    if (localTs > cloudTs) {
+      localNewer = true;
+      return localGame;
+    }
+    // Cloud wins ties. This is important for a new device whose bundled
+    // defaults have no timestamp and must never replace established cloud data.
+    return cloudGame;
+  }).filter(Boolean);
+
+  merged.sort((a, b) => String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
+  return { inventory: merged, localNewer };
+}
+
+function mergeLatestCloudInventory(cloudSnapshot) {
+  if (!Array.isArray(cloudSnapshot?.inventory) || !cloudSnapshot.inventory.length) return;
+  const merged = mergeInventoryRows(inventory, cloudSnapshot.inventory);
+  inventory = merged.inventory;
+  state.inventory = inventory;
 }
 
 async function loadCloudState(options = {}) {
@@ -1585,13 +1641,15 @@ async function loadCloudState(options = {}) {
     const activeDate = state.businessDate || todayIso();
     const cloudState = cloneJson(data.state);
     if (normalizeInventorySlots(cloudState)) _mergeHadLocalNewer = true;
-    const keepLocalInventory = inventoryEditMode ||
-      (inventory[0]?._inventoryUpdatedAt || "") > (cloudState.inventory?.[0]?._inventoryUpdatedAt || "");
+    const keepLocalInventory = inventoryEditMode;
+    let mergedInventory = inventory;
     if (keepLocalInventory) {
       if (alignInventorySlots(cloudState, inventory)) _mergeHadLocalNewer = true;
-    } else if (cloudState.inventory) {
-      state.inventory = inventory;
-      remapInventoryDrafts(alignInventorySlots(state, cloudState.inventory));
+    } else if (Array.isArray(cloudState.inventory)) {
+      const inventoryMerge = mergeInventoryRows(inventory, cloudState.inventory);
+      mergedInventory = inventoryMerge.inventory;
+      cloudState.inventory = mergedInventory;
+      if (inventoryMerge.localNewer) _mergeHadLocalNewer = true;
     }
 
     // --- Field-level merge for dailyLogs entries ---
@@ -1730,23 +1788,11 @@ async function loadCloudState(options = {}) {
         orderAudit: state.orderAudit,
         orderDc: state.orderDc,
         currentOrderPreview: state.currentOrderPreview,
-      } : {}),
+      } : { inventory: mergedInventory }),
     }, false);
     lastLoadedCloudUpdatedAt = data.updated_at || lastLoadedCloudUpdatedAt;
-    // Never replace inventory from cloud while the user is actively editing it.
-    // Outside edit mode, use whichever version has the newer _inventoryUpdatedAt timestamp.
     if (!inventoryEditMode) {
-      const localTs = inventory[0]?._inventoryUpdatedAt || "";
-      const cloudTs = (state.inventory || [])[0]?._inventoryUpdatedAt || "";
-      if (cloudTs >= localTs) {
-        inventory = state.inventory || inventory;
-      }
-    }
-    // If local inventory is newer, flag for push-back
-    {
-      const localTs2 = inventory[0]?._inventoryUpdatedAt || "";
-      const cloudTs2 = (cloudState.inventory || [])[0]?._inventoryUpdatedAt || "";
-      if (localTs2 > cloudTs2) _mergeHadLocalNewer = true;
+      inventory = state.inventory || inventory;
     }
     writeLocalState();
     hydrateActiveDay();
@@ -3264,8 +3310,8 @@ function updateInventoryField(id, field, value, previousOverride = null) {
   if (changedBookInfo) {
     markInventoryBookChangedForToday(game, previousSnapshot);
   }
-  const _ts = new Date().toISOString();
-  inventory.forEach((g) => { g._inventoryUpdatedAt = _ts; });
+  game._inventoryUpdatedAt = new Date().toISOString();
+  game._inventorySyncVersion = 2;
   persistState();
 }
 
@@ -3352,7 +3398,10 @@ function reorderInventory(fromId, toId) {
   state.inventory = inventory;
   remapInventoryDrafts(normalizeInventorySlots(state));
   const _rts = new Date().toISOString();
-  inventory.forEach((g) => { g._inventoryUpdatedAt = _rts; });
+  inventory.forEach((g) => {
+    g._inventoryUpdatedAt = _rts;
+    g._inventorySyncVersion = 2;
+  });
   persistState();
   render();
 }
@@ -6891,9 +6940,8 @@ elements.editInventoryButton.addEventListener("click", () => {
     if (document.activeElement?.dataset?.inventoryField) {
       document.activeElement.blur();
     }
-    // Stamp fresh timestamp and force immediate cloud push
-    const _lts = new Date().toISOString();
-    inventory.forEach((g) => { g._inventoryUpdatedAt = _lts; });
+    // Each edited row was timestamped by its own blur/input handler. Do not
+    // mark untouched rows as new, or an older device could revive stale books.
     persistState();
     saveCloudState();
   }
