@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=20260425-1" />
+    <link rel="stylesheet" href="styles.css?v=20261010-inventory-controls-1" />
   </head>
   <body>
     <div class="shell">
@@ -768,6 +768,7 @@
         <p class="eyebrow" id="appConfirmEyebrow">Confirm</p>
         <h2 id="appConfirmTitle">Save change?</h2>
         <p id="appConfirmBody">Choose what to do with this change.</p>
+        <input id="appConfirmInput" class="app-confirm-input" type="number" inputmode="numeric" min="0" step="1" hidden />
         <div class="app-modal-actions">
           <button id="appConfirmCancel" class="ghost-button" type="button">No</button>
           <button id="appConfirmOk" type="button">Yes</button>
@@ -811,6 +812,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-  <script src="app.js?v=20261009-inventory-row-sync-1"></script>
+  <script src="app.js?v=20261010-authoritative-dated-inventory-2"></script>
   </body>
 </html>

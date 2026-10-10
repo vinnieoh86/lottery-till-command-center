@@ -426,6 +426,23 @@ select:focus {
   font-size: 0.82rem;
 }
 
+.app-confirm-input {
+  width: 100%;
+  margin: 0.75rem 0 1rem;
+  font-size: 1.1rem;
+}
+
+.inventory-edit-stack {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.inventory-preset-button {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .app-modal-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

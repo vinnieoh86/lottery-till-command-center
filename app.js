@@ -22,55 +22,59 @@ const ticketRules = {
   50: 30,
 };
 
-let inventory = [
-  { box: "1", bookNumber: "0762", name: "BILLION", value: 50 },
-  { box: "2", bookNumber: "", name: "", value: "" },
+const AUTHORITATIVE_INVENTORY_DATE = "2026-10-09";
+const AUTHORITATIVE_INVENTORY_VERSION = "inventory-baseline-2026-10-09-v1";
+const AUTHORITATIVE_INVENTORY = [
+  { box: "1", bookNumber: "1091", name: "MILLIONAIRE BLOWOUT", value: 50 },
+  { box: "2", bookNumber: "1056", name: "$1,000,000 CASHWORD", value: 20 },
   { box: "3", bookNumber: "1079", name: "WILD CASH TRIPLER", value: 30 },
-  { box: "4", bookNumber: "1073", name: "SET FOR LIFE $20", value: 20 },
+  { box: "4", bookNumber: "1084", name: "$1,000,000 STACKED", value: 20 },
   { box: "5", bookNumber: "1028", name: "$300 MILLION", value: 20 },
   { box: "6", bookNumber: "1048", name: "$1,000,000 HOLIDAY", value: 20 },
   { box: "7", bookNumber: "1023", name: "CASINO NIGHT", value: 10 },
-  { box: "8", bookNumber: "1042", name: "MYSTERY MULTIPLAYER", value: 10 },
+  { box: "8", bookNumber: "1083", name: "MONEY MONEY MONEY", value: 10 },
   { box: "9", bookNumber: "1072", name: "SET FOR LIFE $10", value: 10 },
-  { box: "10", bookNumber: "1053", name: "$500,000 CASHWORD", value: 10 },
+  { box: "10", bookNumber: "1118", name: "$500,000 CASHWORD", value: 10 },
   { box: "11", bookNumber: "1055", name: "50, 100, 500", value: 10 },
   { box: "12", bookNumber: "1031", name: "$500,000 BANKROLL", value: 10 },
   { box: "13", bookNumber: "1017", name: "FEELING LUCKY?", value: 10 },
-  { box: "14", bookNumber: "1056", name: "$1,000,000 CASHWORD", value: 20 },
-  { box: "15", bookNumber: "1066", name: "LUCKY NO. 7", value: 10 },
-  { box: "16", bookNumber: "1007", name: "CASH PLUS", value: 10 },
-  { box: "17", bookNumber: "1041", name: "WIN BIG", value: 5 },
+  { box: "14", bookNumber: "1092", name: "BINGO X50", value: 10 },
+  { box: "15", bookNumber: "1090", name: "INSTANT JACKPOT", value: 10 },
+  { box: "16", bookNumber: "1125", name: "$1,000,000 BLACK TITANIUM", value: 10 },
+  { box: "17", bookNumber: "1089", name: "BONUS CASH WHEEL", value: 5 },
   { box: "18", bookNumber: "1038", name: "BINGO 25X", value: 5 },
   { box: "19", bookNumber: "1087", name: "25, 50, 250", value: 5 },
-  { box: "20", bookNumber: "1012", name: "MONOPOLY BONUS 5", value: 10 },
-  { box: "21", bookNumber: "1030", name: "JOKER'S WILD", value: 5 },
-  { box: "22", bookNumber: "1022", name: "THREE STOOGES", value: 5 },
-  { box: "23", bookNumber: "0891", name: "CASH XPLOSION", value: 5 },
+  { box: "20", bookNumber: "1097", name: "GOLD RUSH", value: 10 },
+  { box: "21", bookNumber: "1096", name: "5 TIMES LUCKY", value: 5 },
+  { box: "22", bookNumber: "1099", name: "LUCKY STREAK", value: 5 },
+  { box: "23", bookNumber: "1093", name: "CASH XPLOSION 25X", value: 5 },
   { box: "24", bookNumber: "1065", name: "JACKPOT PARTY", value: 5 },
   { box: "25", bookNumber: "1077", name: "ACES AND 8'S", value: 5 },
-  { box: "26", bookNumber: "1059", name: "LET IT SNOW", value: 5 },
+  { box: "26", bookNumber: "1082", name: "FUN 5'S", value: 5 },
   { box: "27", bookNumber: "1071", name: "SET FOR LIFE $5", value: 5 },
   { box: "28", bookNumber: "1086", name: "$5 CASHWORD", value: 5 },
   { box: "29", bookNumber: "1036", name: "WHITE DIAMONDS", value: 10 },
-  { box: "30", bookNumber: "1068", name: "CASH XPLOSION 10X", value: 2 },
+  { box: "30", bookNumber: "1057", name: "CASH XPLOSION CASHWORD", value: 2 },
   { box: "31", bookNumber: "1035", name: "PLINKO", value: 5 },
   { box: "32", bookNumber: "1080", name: "BINGO MULTIPLIER", value: 2 },
-  { box: "33", bookNumber: "1029", name: "LUCKY GEM", value: 2 },
-  { box: "34", bookNumber: "1054", name: "CASH XPLOSION CASHWORD", value: 2 },
+  { box: "33", bookNumber: "1095", name: "MAGIC 8 BALL", value: 2 },
+  { box: "34", bookNumber: "1068", name: "CASH XPLOSION 10X", value: 2 },
   { box: "35", bookNumber: "1034", name: "PINK DIAMONDS", value: 2 },
-  { box: "36", bookNumber: "0890", name: "CASH XPLOSION 10X", value: 2 },
+  { box: "36", bookNumber: "1100", name: "100 IN A FLASH", value: 2 },
   { box: "37", bookNumber: "1069", name: "SET FOR LIFE", value: 1 },
   { box: "38", bookNumber: "1040", name: "5,20,100", value: 2 },
   { box: "39", bookNumber: "1064", name: "GNOMEBODY IS LUCKIER", value: 2 },
   { box: "40", bookNumber: "1070", name: "SET FOR LIFE $2", value: 2 },
-  { box: "41", bookNumber: "1009", name: "MONOPOLY 5X", value: 1 },
-  { box: "42", bookNumber: "1063", name: "LUCK OF THE IRISH TRIPLER", value: 1 },
-  { box: "43", bookNumber: "1044", name: "HOLIDAY CASH", value: 1 },
+  { box: "41", bookNumber: "1081", name: "TRIPLE 7'S", value: 2 },
+  { box: "42", bookNumber: "1088", name: "SAPPHIRE BLUE 7", value: 1 },
+  { box: "43", bookNumber: "1094", name: "CRAZY CASH", value: 1 },
   { box: "44", bookNumber: "1033", name: "WINNER WINNER CHICKEN", value: 1 },
   { box: "45", bookNumber: "1052", name: "TRIPLE TRIPLER", value: 1 },
   { box: "46", bookNumber: "1076", name: "ELECTRIC 8", value: 1 },
   { box: "A", bookNumber: "1078", name: "CROSS MATCH BINGO", value: 10, ticketCount: 30 },
 ];
+
+let inventory = AUTHORITATIVE_INVENTORY.map((game) => ({ ...game }));
 
 const orderDefaults = {
   "37": 3,
@@ -316,6 +320,7 @@ const elements = {
   appConfirmEyebrow: document.querySelector("#appConfirmEyebrow"),
   appConfirmTitle: document.querySelector("#appConfirmTitle"),
   appConfirmBody: document.querySelector("#appConfirmBody"),
+  appConfirmInput: document.querySelector("#appConfirmInput"),
   appConfirmCancel: document.querySelector("#appConfirmCancel"),
   appConfirmOk: document.querySelector("#appConfirmOk"),
   mobileEntryBar: document.querySelector("#mobileEntryBar"),
@@ -502,6 +507,8 @@ function mergePersistedDailyLogs(snapshotLogs = {}, standaloneLogs = null) {
       const snapshotEndingTs = snapshotEntry.todayEndingUpdatedAt || snapshotEntry.updatedAt || "";
       const storedManualTs = storedEntry.manualInstantUpdatedAt || "";
       const snapshotManualTs = snapshotEntry.manualInstantUpdatedAt || "";
+      const storedPreviousTs = storedEntry.previousEndingOverrideAt || "";
+      const snapshotPreviousTs = snapshotEntry.previousEndingOverrideAt || "";
 
       mergedEntries[boxId] = {
         ...snapshotEntry,
@@ -521,6 +528,13 @@ function mergePersistedDailyLogs(snapshotLogs = {}, standaloneLogs = null) {
               manualInstantSold: storedEntry.manualInstantSold,
               manualInstantUpdatedAt: storedEntry.manualInstantUpdatedAt,
               manualInstantUpdatedBy: storedEntry.manualInstantUpdatedBy,
+            }
+          : {}),
+        ...(storedPreviousTs > snapshotPreviousTs
+          ? {
+              previousEndingOverride: storedEntry.previousEndingOverride,
+              previousEndingOverrideAt: storedEntry.previousEndingOverrideAt,
+              previousEndingOverrideBy: storedEntry.previousEndingOverrideBy,
             }
           : {}),
       };
@@ -548,6 +562,46 @@ function mergePersistedDailyLogs(snapshotLogs = {}, standaloneLogs = null) {
   });
 
   return merged;
+}
+
+function authoritativeInventoryRows() {
+  return AUTHORITATIVE_INVENTORY.map((game) => ({
+    ...game,
+    _inventoryUpdatedAt: "2026-10-09T23:05:16.000Z",
+    _inventorySyncVersion: 3,
+  }));
+}
+
+function normalizeInventoryTimeline(timeline = {}) {
+  if (!timeline || typeof timeline !== "object" || Array.isArray(timeline)) return {};
+  return Object.fromEntries(Object.entries(timeline).filter(([, snapshot]) =>
+    snapshot && Array.isArray(snapshot.inventory),
+  ));
+}
+
+function ensureAuthoritativeInventoryBaseline(target) {
+  target.seedVersions = { ...(target.seedVersions || {}) };
+  target.inventoryTimeline = normalizeInventoryTimeline(target.inventoryTimeline);
+  if (target.seedVersions[AUTHORITATIVE_INVENTORY_VERSION]) return false;
+
+  const legacyRows = Array.isArray(target.inventory) ? cloneJson(target.inventory) : [];
+  if (legacyRows.length && !target.inventoryTimeline["0000-00-00"]) {
+    target.inventoryTimeline["0000-00-00"] = {
+      updatedAt: "",
+      source: "pre-2026-10-09-inventory",
+      inventory: legacyRows,
+    };
+  }
+
+  const baselineRows = authoritativeInventoryRows();
+  target.inventoryTimeline[AUTHORITATIVE_INVENTORY_DATE] = {
+    updatedAt: "2026-10-09T23:05:16.000Z",
+    source: AUTHORITATIVE_INVENTORY_VERSION,
+    inventory: cloneJson(baselineRows),
+  };
+  target.inventory = baselineRows;
+  target.seedVersions[AUTHORITATIVE_INVENTORY_VERSION] = true;
+  return true;
 }
 
 function normalizeStoredState(parsed = {}, mergeStandalone = true) {
@@ -589,10 +643,12 @@ function normalizeStoredState(parsed = {}, mergeStandalone = true) {
       mobileEntryDock: parsed.uiSettings?.mobileEntryDock || "bottom",
     },
     scanRecords: compactScanRecordsForStorage(parsed.scanRecords || {}),
+    inventoryTimeline: normalizeInventoryTimeline(parsed.inventoryTimeline || {}),
     lastSavedAt: parsed.lastSavedAt || null,
     seedVersions: parsed.seedVersions || {},
     _ownSaveTimestamp: parsed._ownSaveTimestamp || "",
   };
+  ensureAuthoritativeInventoryBaseline(normalized);
   normalizeInventorySlots(normalized);
   return normalized;
 }
@@ -711,6 +767,7 @@ function stateForBackupStorage() {
     storeCashDrafts: state.storeCashDrafts || {},
     storeCashRecords: state.storeCashRecords || {},
     inventory,
+    inventoryTimeline: state.inventoryTimeline || {},
     orderInventory: state.orderInventory || {},
     extraOrders: state.extraOrders || [],
     orderDc: state.orderDc || {},
@@ -1459,6 +1516,7 @@ async function saveCloudState() {
   }
   mergeLatestCloudCashCounts(latestRows?.[0]?.state);
   mergeLatestCloudInventory(latestRows?.[0]?.state);
+  mergeLatestCloudInventoryTimeline(latestRows?.[0]?.state);
   const saveTimestamp = new Date().toISOString();
   // Store in state so realtime echo check (payloadSaveTs === state._ownSaveTimestamp) works
   state._ownSaveTimestamp = saveTimestamp;
@@ -1517,8 +1575,8 @@ function inventoryRowUpdatedAt(game) {
   return String(game?._inventoryUpdatedAt || "");
 }
 
-function hasProtectedInventoryRowVersion(game) {
-  return normalizeNumber(game?._inventorySyncVersion) >= 2;
+function inventoryRowSyncVersion(game) {
+  return normalizeNumber(game?._inventorySyncVersion);
 }
 
 // Inventory is shared across devices, but each box is edited independently.
@@ -1539,11 +1597,11 @@ function mergeInventoryRows(localRows = [], cloudRows = []) {
     }
     if (!localGame) return cloudGame;
 
-    const localProtected = hasProtectedInventoryRowVersion(localGame);
-    const cloudProtected = hasProtectedInventoryRowVersion(cloudGame);
-    if (localProtected !== cloudProtected) {
-      if (localProtected) localNewer = true;
-      return localProtected ? localGame : cloudGame;
+    const localVersion = inventoryRowSyncVersion(localGame);
+    const cloudVersion = inventoryRowSyncVersion(cloudGame);
+    if (localVersion !== cloudVersion) {
+      if (localVersion > cloudVersion) localNewer = true;
+      return localVersion > cloudVersion ? localGame : cloudGame;
     }
 
     const localTs = inventoryRowUpdatedAt(localGame);
@@ -1566,6 +1624,41 @@ function mergeLatestCloudInventory(cloudSnapshot) {
   const merged = mergeInventoryRows(inventory, cloudSnapshot.inventory);
   inventory = merged.inventory;
   state.inventory = inventory;
+}
+
+function mergeInventoryTimelines(localTimeline = {}, cloudTimeline = {}) {
+  const local = normalizeInventoryTimeline(localTimeline);
+  const cloud = normalizeInventoryTimeline(cloudTimeline);
+  const merged = {};
+  let localNewer = false;
+  new Set([...Object.keys(local), ...Object.keys(cloud)]).forEach((date) => {
+    const localSnapshot = local[date];
+    const cloudSnapshot = cloud[date];
+    if (!cloudSnapshot) {
+      merged[date] = localSnapshot;
+      localNewer = true;
+      return;
+    }
+    if (!localSnapshot) {
+      merged[date] = cloudSnapshot;
+      return;
+    }
+    const localTs = String(localSnapshot.updatedAt || "");
+    const cloudTs = String(cloudSnapshot.updatedAt || "");
+    const rowMerge = mergeInventoryRows(localSnapshot.inventory, cloudSnapshot.inventory);
+    if (rowMerge.localNewer) localNewer = true;
+    merged[date] = {
+      ...(localTs > cloudTs ? localSnapshot : cloudSnapshot),
+      updatedAt: localTs > cloudTs ? localTs : cloudTs,
+      inventory: rowMerge.inventory,
+    };
+  });
+  return { timeline: merged, localNewer };
+}
+
+function mergeLatestCloudInventoryTimeline(cloudSnapshot) {
+  const merged = mergeInventoryTimelines(state.inventoryTimeline, cloudSnapshot?.inventoryTimeline);
+  state.inventoryTimeline = merged.timeline;
 }
 
 async function loadCloudState(options = {}) {
@@ -1651,6 +1744,9 @@ async function loadCloudState(options = {}) {
       cloudState.inventory = mergedInventory;
       if (inventoryMerge.localNewer) _mergeHadLocalNewer = true;
     }
+    const timelineMerge = mergeInventoryTimelines(state.inventoryTimeline, cloudState.inventoryTimeline);
+    cloudState.inventoryTimeline = timelineMerge.timeline;
+    if (timelineMerge.localNewer) _mergeHadLocalNewer = true;
 
     // --- Field-level merge for dailyLogs entries ---
     // For each date in cloud, merge entries field-by-field using updatedAt timestamps.
@@ -1686,8 +1782,11 @@ async function loadCloudState(options = {}) {
         const localManualTs = localEntry.manualInstantUpdatedAt || "";
         const cloudManualTs = cloudEntry.manualInstantUpdatedAt || "";
         const useLocalManual = localManualTs > cloudManualTs;
+        const localPreviousTs = localEntry.previousEndingOverrideAt || "";
+        const cloudPreviousTs = cloudEntry.previousEndingOverrideAt || "";
+        const useLocalPrevious = localPreviousTs > cloudPreviousTs;
 
-        if (useLocalEnding || useLocalManual) _mergeHadLocalNewer = true;
+        if (useLocalEnding || useLocalManual || useLocalPrevious) _mergeHadLocalNewer = true;
 
         mergedEntries[boxId] = {
           ...cloudEntry,
@@ -1704,6 +1803,11 @@ async function loadCloudState(options = {}) {
             manualInstantSold: localEntry.manualInstantSold,
             manualInstantUpdatedAt: localEntry.manualInstantUpdatedAt,
             manualInstantUpdatedBy: localEntry.manualInstantUpdatedBy,
+          } : {}),
+          ...(useLocalPrevious ? {
+            previousEndingOverride: localEntry.previousEndingOverride,
+            previousEndingOverrideAt: localEntry.previousEndingOverrideAt,
+            previousEndingOverrideBy: localEntry.previousEndingOverrideBy,
           } : {}),
         };
       });
@@ -2078,6 +2182,27 @@ function gameId(game) {
   return String(game.box);
 }
 
+function inventoryForDate(date = state.businessDate) {
+  const timeline = normalizeInventoryTimeline(state.inventoryTimeline || {});
+  const effectiveDate = Object.keys(timeline)
+    .filter((key) => key <= date)
+    .sort()
+    .pop();
+  return effectiveDate ? timeline[effectiveDate].inventory : inventory;
+}
+
+function recordInventorySnapshotForDate(date = state.businessDate) {
+  const updatedAt = new Date().toISOString();
+  state.inventoryTimeline = normalizeInventoryTimeline(state.inventoryTimeline || {});
+  const existing = state.inventoryTimeline[date] || {};
+  state.inventoryTimeline[date] = {
+    ...existing,
+    updatedAt,
+    source: "dated-inventory-edit",
+    inventory: cloneJson(inventory),
+  };
+}
+
 function getTicketCount(game) {
   if (game.ticketCount) return game.ticketCount;
   return ticketRules[Number(game.value)] || 50;
@@ -2176,14 +2301,22 @@ function previousOpenDate(date) {
 
 function getPreviousEnding(game, date = state.businessDate) {
   const id = gameId(game);
+  const currentEntry = state.dailyLogs?.[date]?.entries?.[id];
+  if (Object.prototype.hasOwnProperty.call(currentEntry || {}, "previousEndingOverride")) {
+    return normalizeNumber(currentEntry.previousEndingOverride);
+  }
   const previousDate = previousOpenDate(date);
   const previousLog = state.dailyLogs[previousDate];
-  const previousEntry = previousLog?.entries[id];
+  const previousBox = state.inventoryTimeline?.[date]?.boxTransitions?.[id] || id;
+  const previousEntry = previousLog?.entries[previousBox];
 
-  // New book changes intentionally reset the prior baseline to 0 even if the
-  // previous day has not been formally saved yet. Without this, the reset is
-  // stored but hidden from the daily/reconcile math and display.
-  if (previousEntry?.bookResetForNewGame) return 0;
+  // A new game can optionally use an explicitly entered previous baseline.
+  // Legacy automatic resets remain readable as 0, but new edits never force 0.
+  if (previousEntry?.bookResetForNewGame) {
+    return Object.prototype.hasOwnProperty.call(previousEntry, "bookResetPreviousEnding")
+      ? normalizeNumber(previousEntry.bookResetPreviousEnding)
+      : 0;
+  }
 
   if (!previousLog?.savedAt || !previousEntry || previousEntry.todayEnding === "") return "";
   return normalizeNumber(previousEntry.todayEnding);
@@ -2269,21 +2402,24 @@ function savedDatesInRange(mode = summaryMode) {
 }
 
 function calculateRunningTickets(game, mode = "month") {
-  return savedDatesInRange(mode).reduce((sum, date) => sum + calculateTicketsSold(game, date), 0);
+  return savedDatesInRange(mode).reduce((sum, date) => {
+    const datedGame = inventoryForDate(date).find((item) => gameId(item) === gameId(game)) || game;
+    return sum + calculateTicketsSold(datedGame, date);
+  }, 0);
 }
 
 function calculateInstantSales(date = state.businessDate) {
-  return inventory.reduce((sum, game) => sum + calculateGameSales(game, date), 0);
+  return inventoryForDate(date).reduce((sum, game) => sum + calculateGameSales(game, date), 0);
 }
 
 function calculateManualInstantSales(date = state.businessDate) {
-  return inventory.reduce((sum, game) => {
+  return inventoryForDate(date).reduce((sum, game) => {
     return sum + normalizeNumber(getEntry(game, date).manualInstantSold);
   }, 0);
 }
 
 function calculateTicketsTotal(date = state.businessDate) {
-  return inventory.reduce((sum, game) => sum + calculateTicketsSold(game, date), 0);
+  return inventoryForDate(date).reduce((sum, game) => sum + calculateTicketsSold(game, date), 0);
 }
 
 function calculateLotterySales() {
@@ -2317,7 +2453,7 @@ function shouldShowGameInReconcile(game, date = state.businessDate) {
 }
 
 function reconcileGamesForDate(date = state.businessDate) {
-  return inventory
+  return inventoryForDate(date)
     .filter((game) => shouldShowGameInReconcile(game, date))
     .slice()
     .sort((a, b) => String(a.bookNumber || "").localeCompare(String(b.bookNumber || ""), undefined, { numeric: true }));
@@ -2354,7 +2490,10 @@ function getSavedOpenDatesForMonth() {
 }
 
 function calculateMonthlyTicketsFromSaved(game) {
-  return getSavedOpenDatesForMonth().reduce((sum, date) => sum + calculateTicketsSoldFromSavedEntry(game, date), 0);
+  return getSavedOpenDatesForMonth().reduce((sum, date) => {
+    const datedGame = inventoryForDate(date).find((item) => gameId(item) === gameId(game)) || game;
+    return sum + calculateTicketsSoldFromSavedEntry(datedGame, date);
+  }, 0);
 }
 
 function calculateOrderNeed(game) {
@@ -2446,7 +2585,7 @@ function calculateCashDrawer() {
 }
 
 function calculateManualInstantForDate(date) {
-  return inventory.reduce((sum, game) => sum + normalizeNumber(getEntry(game, date).manualInstantSold), 0);
+  return inventoryForDate(date).reduce((sum, game) => sum + normalizeNumber(getEntry(game, date).manualInstantSold), 0);
 }
 
 function getSavedDayTotals(date) {
@@ -2601,6 +2740,8 @@ function canEditActiveDay(targetInput) {
 }
 
 function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes", cancelText = "No" }) {
+  elements.appConfirmInput.hidden = true;
+  elements.appConfirmInput.value = "";
   elements.appConfirmEyebrow.textContent = eyebrow;
   elements.appConfirmTitle.textContent = title;
   elements.appConfirmBody.textContent = body;
@@ -2625,6 +2766,52 @@ function showAppConfirm({ eyebrow = "Confirm", title, body, confirmText = "Yes",
     const handleCancel = () => {
       cleanup();
       resolve(false);
+    };
+    const handleKeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleOk();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleCancel();
+      }
+    };
+
+    elements.appConfirmOk.addEventListener("click", handleOk);
+    elements.appConfirmCancel.addEventListener("click", handleCancel);
+    elements.appConfirmModal.addEventListener("keydown", handleKeydown);
+  });
+}
+
+function showAppNumberPrompt({ eyebrow = "Set previous", title, body, confirmText = "Save", cancelText = "Keep existing" }) {
+  elements.appConfirmEyebrow.textContent = eyebrow;
+  elements.appConfirmTitle.textContent = title;
+  elements.appConfirmBody.textContent = body;
+  elements.appConfirmInput.value = "";
+  elements.appConfirmInput.hidden = false;
+  elements.appConfirmOk.textContent = confirmText;
+  elements.appConfirmCancel.textContent = cancelText;
+  elements.appConfirmCancel.hidden = false;
+  elements.appConfirmModal.hidden = false;
+  window.setTimeout(() => elements.appConfirmInput.focus(), 20);
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      elements.appConfirmModal.hidden = true;
+      elements.appConfirmInput.hidden = true;
+      elements.appConfirmOk.removeEventListener("click", handleOk);
+      elements.appConfirmCancel.removeEventListener("click", handleCancel);
+      elements.appConfirmModal.removeEventListener("keydown", handleKeydown);
+    };
+    const handleOk = () => {
+      const raw = elements.appConfirmInput.value.trim();
+      cleanup();
+      resolve(raw === "" ? null : Math.max(0, Math.trunc(normalizeNumber(raw))));
+    };
+    const handleCancel = () => {
+      cleanup();
+      resolve(null);
     };
     const handleKeydown = (event) => {
       if (event.key === "Enter") {
@@ -3014,7 +3201,7 @@ function renderGames() {
   if (manualSalesHeaderEl) manualSalesHeaderEl.innerHTML = `Manual sold $<br><span id="colHeaderManualTs" class="col-ts">${fmtTs(latestManualTs)}</span>`;
   if (trailingHeaderEl) trailingHeaderEl.textContent = reconcileVisible ? "Variance" : "Month tickets";
 
-  const displayGames = reconcileVisible ? reconcileGamesForDate(state.businessDate) : inventory;
+  const displayGames = reconcileVisible ? reconcileGamesForDate(state.businessDate) : inventoryForDate(state.businessDate);
   displayGames.forEach((game, rowIndex) => {
     if (gameSearchQuery) {
       const q = gameSearchQuery.toLowerCase();
@@ -3041,10 +3228,13 @@ function renderGames() {
             </select>
           `;
         } else {
-          field.innerHTML = `<input class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-original-value="${value}" data-enter-group="inventory-edit" data-enter-index="${editIndex}" type="text" value="${value}" />`;
+          const presetButton = key === "bookNumber"
+            ? `<button class="inventory-preset-button" data-set-previous="${id}" type="button">Set prev</button>`
+            : "";
+          field.innerHTML = `<div class="inventory-edit-stack"><input class="inventory-edit-input" data-inventory-box="${id}" data-inventory-field="${key}" data-original-value="${value}" data-enter-group="inventory-edit" data-enter-index="${editIndex}" type="text" value="${value}" />${presetButton}</div>`;
         }
       } else if (key === "box" && inventoryEditMode) {
-        field.innerHTML = `<span class="drag-handle" title="Drag to reorder">::</span><strong>${game.box}</strong>`;
+        field.innerHTML = `<span class="drag-handle" title="Drag to move and lock this game into another box">::</span><strong>${game.box}</strong>`;
       } else if (key === "box") {
         const isDc = Boolean(state.orderDc[id]);
         field.innerHTML = `<button type="button" class="box-dc-btn${isDc ? " is-dc" : ""}" data-dc-toggle="${id}" title="${isDc ? "DC — click to reactivate" : "Click to mark DC"}">${game.box}</button>`;
@@ -3217,6 +3407,14 @@ function renderGames() {
         });
         input.addEventListener("keydown", handleGroupedEnterKeydown);
       });
+      row.querySelector("[data-set-previous]")?.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        const activeInventoryInput = document.activeElement?.dataset?.inventoryField
+          ? document.activeElement
+          : null;
+        activeInventoryInput?.blur();
+        window.setTimeout(() => presetPreviousEndingForGame(id), 0);
+      });
     }
 
     const dcBtn = row.querySelector("[data-dc-toggle]");
@@ -3271,17 +3469,30 @@ function markInventoryBookChangedForToday(game, previousSnapshot = {}) {
     name: game.name ?? "",
     value: game.value ?? "",
   };
-  const previousDate = previousOpenDate(state.businessDate);
-  const previousLog = getDayLog(previousDate);
-  previousLog.entries[id] = {
-    ...(previousLog.entries[id] || {}),
-    todayEnding: 0,
-    bookResetForNewGame: true,
-    bookResetAt: entry.bookChangedAt,
-    bookResetBy: entry.bookChangedBy,
-  };
   // Reactivate this box anywhere a new book/game is assigned to it.
   state.orderDc[id] = false;
+}
+
+async function presetPreviousEndingForGame(id) {
+  const game = inventory.find((item) => gameId(item) === id);
+  if (!game) return;
+  const preset = await showAppNumberPrompt({
+    eyebrow: "Optional previous count",
+    title: `Set previous ending for box ${game.box}`,
+    body: `Enter the previous ticket count for ${game.bookNumber || "this game"}. Choose Keep existing if no reset is needed.`,
+    confirmText: "Use this count",
+    cancelText: "Keep existing",
+  });
+  if (preset === null) return;
+
+  const updatedAt = new Date().toISOString();
+  const currentEntry = getEntry(game, state.businessDate);
+  currentEntry.previousEndingOverride = preset;
+  currentEntry.previousEndingOverrideAt = updatedAt;
+  currentEntry.previousEndingOverrideBy = currentUserName();
+  persistState();
+  renderGames();
+  renderTotals();
 }
 
 function updateInventoryField(id, field, value, previousOverride = null) {
@@ -3311,7 +3522,8 @@ function updateInventoryField(id, field, value, previousOverride = null) {
     markInventoryBookChangedForToday(game, previousSnapshot);
   }
   game._inventoryUpdatedAt = new Date().toISOString();
-  game._inventorySyncVersion = 2;
+  game._inventorySyncVersion = 3;
+  recordInventorySnapshotForDate(state.businessDate);
   persistState();
 }
 
@@ -3340,42 +3552,52 @@ function remapInventoryData(target, boxMap) {
   });
 }
 
+function remapCurrentInventoryData(target, boxMap, date = state.businessDate) {
+  const currentLog = target.dailyLogs?.[date];
+  if (currentLog?.entries) currentLog.entries = remapBoxValues(currentLog.entries, boxMap);
+  ["orderInventory", "orderAudit", "orderDc"].forEach((key) => {
+    target[key] = remapBoxValues(target[key], boxMap);
+  });
+  if (target.currentOrderPreview) {
+    (target.currentOrderPreview.rows || []).forEach((row) => {
+      row.box = boxMap[String(row.box)] ?? row.box;
+    });
+    if (target.currentOrderPreview.inputAudit) {
+      target.currentOrderPreview.inputAudit = remapBoxValues(target.currentOrderPreview.inputAudit, boxMap);
+    }
+  }
+
+  target.inventoryTimeline = normalizeInventoryTimeline(target.inventoryTimeline || {});
+  const existingSnapshot = target.inventoryTimeline[date] || {};
+  const existingTransitions = existingSnapshot.boxTransitions || {};
+  const boxTransitions = {};
+  Object.entries(boxMap).forEach(([oldBox, newBox]) => {
+    boxTransitions[newBox] = existingTransitions[oldBox] || oldBox;
+  });
+  target.inventoryTimeline[date] = {
+    ...existingSnapshot,
+    boxTransitions,
+    inventory: existingSnapshot.inventory || cloneJson(inventory),
+  };
+  scanDraft.manualReviewValues = remapBoxValues(scanDraft.manualReviewValues, boxMap);
+}
+
 function normalizeInventorySlots(target) {
   const games = target.inventory || [];
-  const slots = games.map((game) => String(game.box)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  if (new Set(slots).size !== games.length) return null;
-  const boxMap = Object.fromEntries(games.map((game, index) => [gameId(game), slots[index]]));
-  if (Object.entries(boxMap).every(([oldBox, newBox]) => oldBox === newBox)) return null;
-  remapInventoryData(target, boxMap);
-  games.forEach((game, index) => { game.box = slots[index]; });
-  return boxMap;
+  const before = games.map((game) => gameId(game)).join("|");
+  games.sort((a, b) => String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
+  const after = games.map((game) => gameId(game)).join("|");
+  // Box IDs are physical locations and must never be reassigned from array
+  // position. Sorting is visual only and does not move counts between boxes.
+  return before === after ? null : {};
 }
 
 // Align an older device's box keys before the existing field timestamp merge.
 // Only a complete, unambiguous permutation is safe to infer from old snapshots.
 function alignInventorySlots(target, desiredInventory) {
-  const games = target.inventory || [];
-  if (!games.length || games.length !== desiredInventory.length) return null;
-  const signature = (game) => JSON.stringify([game.bookNumber || "", game.name || "", game.value, game.ticketCount || null]);
-  const destinations = new Map();
-  desiredInventory.forEach((game) => {
-    const key = signature(game);
-    destinations.set(key, [...(destinations.get(key) || []), game]);
-  });
-  const boxMap = {};
-  for (const game of games) {
-    const candidates = destinations.get(signature(game));
-    const match = candidates?.length === 1 ? candidates[0]
-      : candidates?.find((candidate) => gameId(candidate) === gameId(game));
-    if (!match) return null;
-    boxMap[gameId(game)] = gameId(match);
-  }
-  if (new Set(Object.values(boxMap)).size !== games.length) return null;
-  if (Object.entries(boxMap).every(([oldBox, newBox]) => oldBox === newBox)) return null;
-  remapInventoryData(target, boxMap);
-  games.forEach((game) => { game.box = boxMap[gameId(game)]; });
-  games.sort((a, b) => String(a.box).localeCompare(String(b.box), undefined, { numeric: true }));
-  return boxMap;
+  // Legacy drag/reorder alignment intentionally disabled. Physical box IDs
+  // are stable keys; matching by game signature caused counts to reverse.
+  return null;
 }
 
 function remapInventoryDrafts(boxMap) {
@@ -3393,15 +3615,21 @@ function reorderInventory(fromId, toId) {
   const toIndex = inventory.findIndex((game) => gameId(game) === toId);
   if (fromIndex < 0 || toIndex < 0) return;
 
+  const slots = inventory
+    .map((game) => gameId(game))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const [movedGame] = inventory.splice(fromIndex, 1);
   inventory.splice(toIndex, 0, movedGame);
+  const boxMap = Object.fromEntries(inventory.map((game, index) => [gameId(game), slots[index]]));
+  remapCurrentInventoryData(state, boxMap, state.businessDate);
+  inventory.forEach((game, index) => { game.box = slots[index]; });
   state.inventory = inventory;
-  remapInventoryDrafts(normalizeInventorySlots(state));
   const _rts = new Date().toISOString();
   inventory.forEach((g) => {
     g._inventoryUpdatedAt = _rts;
-    g._inventorySyncVersion = 2;
+    g._inventorySyncVersion = 3;
   });
+  recordInventorySnapshotForDate(state.businessDate);
   persistState();
   render();
 }
@@ -3758,7 +3986,7 @@ function getDisplayedManualValue(game, date = state.businessDate) {
 }
 
 function calculateDisplayedManualInstantSales(date = state.businessDate) {
-  return inventory.reduce((sum, game) => sum + normalizeNumber(getDisplayedManualValue(game, date)), 0);
+  return inventoryForDate(date).reduce((sum, game) => sum + normalizeNumber(getDisplayedManualValue(game, date)), 0);
 }
 
 function hasDisplayedManualValue(game, date = state.businessDate) {
@@ -3861,15 +4089,15 @@ function renderParsedSalesSummaryRows(parsed) {
 }
 
 
-function buildInventoryGameNumberSet() {
+function buildInventoryGameNumberSet(date = state.businessDate) {
   const s = new Set();
-  inventory.forEach(g => { if (g.bookNumber) s.add(String(g.bookNumber).padStart(4,"0")); });
+  inventoryForDate(date).forEach(g => { if (g.bookNumber) s.add(String(g.bookNumber).padStart(4,"0")); });
   return s;
 }
-function fixTruncatedGameNumber(raw) {
+function fixTruncatedGameNumber(raw, date = state.businessDate) {
   const digits = String(raw||"").replace(/\D/g,"").trim();
   if (!digits) return null;
-  const inv = buildInventoryGameNumberSet();
+  const inv = buildInventoryGameNumberSet(date);
   const padded = digits.padStart(4,"0");
   if (inv.has(padded)) return padded;
   if (digits.length <= 2) {
@@ -3887,7 +4115,7 @@ function normalizeManualInstantParsed(parsed = {}) {
   const normalizedDate = normalizeParsedReportDate(parsed.reportDate || parsed.date || parsed.businessDate);
   const sourceTotals = Array.isArray(parsed.totalsByGame) ? parsed.totalsByGame : [];
   sourceTotals.forEach((item) => {
-    const gameNumber = fixTruncatedGameNumber(String(item.gameNumber ?? item.game_number ?? item.game ?? "").trim());
+    const gameNumber = fixTruncatedGameNumber(String(item.gameNumber ?? item.game_number ?? item.game ?? "").trim(), normalizedDate || state.businessDate);
     if (!gameNumber || gameNumber === "0000") return;
     totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + parseScanNumber(item.amount ?? item.total ?? item.sales);
   });
@@ -3895,7 +4123,7 @@ function normalizeManualInstantParsed(parsed = {}) {
   if (!sourceTotals.length && Array.isArray(parsed.lines)) {
     parsed.lines.forEach((line) => {
       if (line.duplicate) return;
-      const gameNumber = fixTruncatedGameNumber(String(line.gameNumber ?? line.game_number ?? line.game ?? "").trim());
+      const gameNumber = fixTruncatedGameNumber(String(line.gameNumber ?? line.game_number ?? line.game ?? "").trim(), normalizedDate || state.businessDate);
       if (!gameNumber || gameNumber === "0000") return;
       totalsMap[gameNumber] = normalizeNumber(totalsMap[gameNumber]) + parseScanNumber(line.amount ?? line.total ?? line.sales);
     });
@@ -3913,13 +4141,14 @@ function normalizeManualInstantParsed(parsed = {}) {
 
 function manualInstantMatchedRows(parsed = scanDraft.parsed) {
   const normalized = normalizeManualInstantParsed(parsed || {});
+  const matchingInventory = inventoryForDate(normalized.reportDate || state.businessDate);
   return normalized.totalsByGame
     .map((item) => {
       const raw = String(item.gameNumber || "").trim();
       const padded = raw.padStart(4, "0").slice(-4);
       // Allocate only by the current game number. Known three-digit OCR
       // truncations are repaired by normalizeManualInstantParsed first.
-      const game = inventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded);
+      const game = matchingInventory.find((c) => String(c.bookNumber || "").padStart(4, "0") === padded);
       return {
         game,
         gameNumber: padded,
@@ -3930,9 +4159,9 @@ function manualInstantMatchedRows(parsed = scanDraft.parsed) {
 }
 
 function findGameByParsedGameNumber(rawGameNumber) {
-  const normalized = fixTruncatedGameNumber(rawGameNumber);
+  const normalized = fixTruncatedGameNumber(rawGameNumber, state.businessDate);
   if (!normalized) return null;
-  return inventory.find((game) => String(game.bookNumber || "").padStart(4, "0") === normalized) || null;
+  return inventoryForDate(state.businessDate).find((game) => String(game.bookNumber || "").padStart(4, "0") === normalized) || null;
 }
 
 function parsedManualInstantTotal(parsed = scanDraft.parsed) {
@@ -5494,7 +5723,7 @@ function saveDay() {
 function allEndingCountsEntered(date = state.businessDate) {
   if (isClosedDate(date)) return false;
   const entries = state.dailyLogs[date]?.entries || {};
-  return inventory.every((game) => {
+  return inventoryForDate(date).every((game) => {
     const entry = entries[gameId(game)];
     return entry && entry.todayEnding !== "" && entry.todayEnding !== undefined;
   });
@@ -5565,7 +5794,7 @@ function buildAuditPayload() {
   return {
     businessDate: state.businessDate,
     totals: buildTotals(),
-    games: inventory.map((game) => ({
+    games: inventoryForDate(state.businessDate).map((game) => ({
       box: game.box,
       bookNumber: game.bookNumber,
       name: game.name,
@@ -6112,7 +6341,7 @@ function renderMonthMatrix() {
 
   // Sort visibleGames by monthMatrixSort
   const sortDir = monthMatrixSort.direction === "asc" ? 1 : -1;
-  const visibleGames = inventory
+  const visibleGames = inventoryForDate(state.businessDate)
     .filter((game) => game.value !== "")
     .filter((game) => summaryValueFilter === "all" || String(game.value) === summaryValueFilter)
     .sort((a, b) => {
@@ -6171,10 +6400,11 @@ function renderMonthMatrix() {
       .map((date) => {
         if (isClosedDate(date)) return `<td class="closed-matrix-day"></td>`;
 
-        const entry = state.dailyLogs[date]?.entries[gameId(game)];
+        const datedGame = inventoryForDate(date).find((item) => gameId(item) === gameId(game)) || game;
+        const entry = state.dailyLogs[date]?.entries[gameId(datedGame)];
         const ending = entry?.todayEnding ?? "";
-        const tickets = calculateTicketsSoldFromSavedEntry(game, date);
-        const sales = tickets * normalizeNumber(game.value);
+        const tickets = calculateTicketsSoldFromSavedEntry(datedGame, date);
+        const sales = tickets * normalizeNumber(datedGame.value);
         monthlyTickets += tickets;
         monthlySales += sales;
 
@@ -6932,6 +7162,15 @@ elements.manualOverrideButton?.addEventListener("click", () => {
   renderTotals();
 });
 elements.editInventoryButton.addEventListener("click", () => {
+  if (!inventoryEditMode && state.businessDate !== todayIso()) {
+    showAppNotice({
+      eyebrow: "Dated inventory protection",
+      title: "Open today's date to change a game",
+      body: "Past lottery lineups are read-only so a current book change cannot rewrite an earlier day.",
+      confirmText: "OK",
+    });
+    return;
+  }
   inventoryEditMode = !inventoryEditMode;
   elements.editInventoryButton.textContent = inventoryEditMode ? "Lock inventory" : "Edit inventory";
   elements.editInventoryButton.classList.toggle("active-edit", inventoryEditMode);
